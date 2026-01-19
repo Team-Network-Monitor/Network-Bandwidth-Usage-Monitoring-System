@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Data Table</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <h1>Live Data Table</h1>
+
+    <button id="start-btn">Start</button>
+    <button id="refresh-btn">Refresh</button>
+
+    <div id="mac-tables">
+        <!-- Separate tables for each MAC address group will be inserted here -->
+    </div>
+
+    <h2>Submit Domain</h2>
+    <form id="domain-form">
+        <input type="text" id="domain-input" placeholder="Enter domain (e.g., example.com)" required>
+        <button type="submit">Submit</button>
+    </form>
+
+    <script src="script.js"></script>
+</body>
+</html>

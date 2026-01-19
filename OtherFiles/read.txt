@@ -1,0 +1,5 @@
+sudo /home/rv/NET/venv/bin/python -m streamlit run c.py
+
+
+pip install streamlit pandas scapy plotly
+

@@ -36,7 +36,11 @@ def get_ip_addresses(domain):
     return ip_addresses
 
 # Example usage
-url =  "channamaduranga.github.io/Portfolio"
+
+# url =  "channamaduranga.github.io/Portfolio"
+
+
+url = "https://channamaduranga.github.io/Portfolio/"
 
 cleaned_domain = clean_domain(url)
 

@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState, useRef } from "react";
 import pcImage from "./assets/pciamge.png";
 import { BiEditAlt } from "react-icons/bi";
@@ -10,6 +11,7 @@ const PCPopupWindow = ({ selectedId, mockNetworkActivity, openModal2 }) => {
 
   const [macData, setMacData] = useState(null);
   const [error, setError] = useState(null);
+
   
   // --- Bandwidth Logic States ---
   const [bandwidth, setBandwidth] = useState("0 B/s");
@@ -20,10 +22,12 @@ const PCPopupWindow = ({ selectedId, mockNetworkActivity, openModal2 }) => {
     if (bytes === 0) return isSpeed ? "0 B/s" : "0 Bytes";
     const units = ["Bytes", "KB", "MB", "GB", "TB"];
     let index = 0;
+
     while (bytes >= 1024 && index < units.length - 1) {
       bytes /= 1024;
       index++;
     }
+
     return `${bytes.toFixed(2)} ${units[index]}${isSpeed ? "/s" : ""}`;
   }
 
@@ -33,6 +37,7 @@ const PCPopupWindow = ({ selectedId, mockNetworkActivity, openModal2 }) => {
         const response = await axios.get(
           `http://127.0.0.1:5000/data/${selectedPC.mac}`
         );
+
         
         const currentTotal = response.data.total_bytes;
 
@@ -46,6 +51,7 @@ const PCPopupWindow = ({ selectedId, mockNetworkActivity, openModal2 }) => {
         setMacData(response.data);
         lastBytesRef.current = currentTotal; // Update reference for next fetch
         setError(null);
+
       } catch (err) {
         setError("Error fetching data");
         console.error(err);
@@ -53,6 +59,7 @@ const PCPopupWindow = ({ selectedId, mockNetworkActivity, openModal2 }) => {
     };
 
     fetchData();
+
     const interval = setInterval(fetchData, FETCH_INTERVAL);
     return () => {
       clearInterval(interval);
@@ -132,6 +139,7 @@ const PCPopupWindow = ({ selectedId, mockNetworkActivity, openModal2 }) => {
               </div>
             )}
           </div>
+
         </div>
       </div>
     </div>
@@ -139,3 +147,4 @@ const PCPopupWindow = ({ selectedId, mockNetworkActivity, openModal2 }) => {
 };
 
 export default PCPopupWindow;
+

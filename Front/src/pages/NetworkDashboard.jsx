@@ -325,6 +325,9 @@ const NetworkDashboard = () => {
                 </button>
                 <PCPopupWindow
                   selectedId={selectedId}
+                  // Find the specific usage data for this PC from your mock data or Redux
+                  usageData={mockHighBandwidth.find(pc => pc.id === selectedId) || { usage: 0 }}
+
                   mockNetworkActivity={mockNetworkActivity}
                   openModal2={openModal2}
                 />

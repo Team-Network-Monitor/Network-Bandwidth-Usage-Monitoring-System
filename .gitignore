@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store  # For Mac users
+.vscode/   # If you are using VS Code
+.idea/     # For JetBrains IDEs
+.venv
+venv/
+
+/Backend/blacklist.json
+/Backend/domain_ips.json
+/Backend/mac_addresses.json

@@ -16,6 +16,7 @@ const PCPopupWindow = ({ selectedId, mockNetworkActivity, openModal2 }) => {
   // --- Bandwidth Logic States ---
   const [bandwidth, setBandwidth] = useState("0 B/s");
   const lastBytesRef = useRef(0); // Using ref to persist last byte count without triggering re-renders
+  const previousMacDataRef = useRef(null); // Ref to store previous MAC data for bandwidth calculation per IP
   const FETCH_INTERVAL = 3000; // Reduced to 3s for more "live" bandwidth feel
 
   function formatBytes(bytes, isSpeed = false) {
@@ -48,7 +49,29 @@ const PCPopupWindow = ({ selectedId, mockNetworkActivity, openModal2 }) => {
           setBandwidth(formatBytes(speed, true));
         }
 
-        setMacData(response.data);
+        // Calculate bandwidth for each IP
+        const updatedData = { ...response.data };
+        if (previousMacDataRef.current && previousMacDataRef.current[selectedPC.mac]) {
+          Object.keys(updatedData[selectedPC.mac]).forEach((ip) => {
+            const currentItem = updatedData[selectedPC.mac][ip];
+            const previousItem = previousMacDataRef.current[selectedPC.mac][ip];
+            if (previousItem) {
+              const diff = currentItem.bytes - previousItem.bytes;
+              const speed = diff / (FETCH_INTERVAL / 1000); // Bytes per second
+              currentItem.bandwidth = formatBytes(speed, true);
+            } else {
+              currentItem.bandwidth = "0 B/s";
+            }
+          });
+        } else {
+          // First fetch or no previous data, set bandwidth to 0
+          Object.keys(updatedData[selectedPC.mac]).forEach((ip) => {
+            updatedData[selectedPC.mac][ip].bandwidth = "0 B/s";
+          });
+        }
+
+        setMacData(updatedData);
+        previousMacDataRef.current = updatedData; // Update ref for next fetch
         lastBytesRef.current = currentTotal; // Update reference for next fetch
         setError(null);
 
@@ -64,6 +87,7 @@ const PCPopupWindow = ({ selectedId, mockNetworkActivity, openModal2 }) => {
     return () => {
       clearInterval(interval);
       lastBytesRef.current = 0; // Reset when closing/changing PC
+      previousMacDataRef.current = null; // Reset previous data
     };
   }, [selectedPC.mac]);
 
@@ -125,8 +149,13 @@ const PCPopupWindow = ({ selectedId, mockNetworkActivity, openModal2 }) => {
                       <div className="truncate text-blue-700 font-medium text-xs max-w-[140px]">
                         {item.domain}
                       </div>
-                      <div className="font-mono text-[10px] text-blue-600 font-bold bg-white px-2 py-1 rounded border">
-                        {formatBytes(item.bytes)}
+                      <div className="flex flex-col items-end">
+                        <div className="font-mono text-[10px] text-blue-600 font-bold bg-white px-2 py-1 rounded border mb-1">
+                          {item.bandwidth}
+                        </div>
+                        <div className="font-mono text-[10px] text-blue-600 font-bold bg-white px-2 py-1 rounded border">
+                          {formatBytes(item.bytes)}
+                        </div>
                       </div>
                     </div>
                   );
@@ -134,8 +163,8 @@ const PCPopupWindow = ({ selectedId, mockNetworkActivity, openModal2 }) => {
                 return null;
               })
             ) : (
-              <div className="text-center py-10 text-blue-300 italic text-sm">
-                {error ? "Backend connection lost" : "Analyzing packets..."}
+              <div className="text-center py-10 text-blue-600 font-bold text-sm">
+                {error ? `Total Usage: ${!macData ? "0 B" : formatBytes(macData.total_bytes)}` : "Analyzing packets..."}
               </div>
             )}
           </div>

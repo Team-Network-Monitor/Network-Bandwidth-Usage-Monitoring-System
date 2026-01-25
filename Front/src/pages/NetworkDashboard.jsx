@@ -13,6 +13,7 @@ import { BiEditAlt } from "react-icons/bi";
 import PCPopupWindow from "./components/PCPopupWindow";
 import AddBlackListPopupWindow from "./AddBlackListPopupWindow";
 import UpdatePCForm from "./components/UpdatePCForm";
+import SummaryPopup from "./components/SummaryPopup";
 import axios from "axios";
 
 // const mockPCsa = Array.from({ length: 100 }, (_, i) => ({
@@ -62,6 +63,7 @@ const NetworkDashboard = () => {
   const [selectedId, setSelectedId] = useState(null);
   const [isOpenForm, setIsOpenForm] = useState(false);
   const [isPCFormOpen, setIsPCFormOpen] = useState(false);
+  const [isSummaryOpen, setIsSummaryOpen] = useState(false);
 
   const mockPCs = useSelector((state) => state.pcs.pcs);
   const [filteredPCs, setFilteredPCs] = useState(mockPCs);
@@ -296,7 +298,29 @@ const NetworkDashboard = () => {
             </div>
           </div>
         </div>
+        <div className="flex justify-center mt-4">
+          <button
+            className="px-4 py-2 rounded-lg bg-blue-500 text-white hover:bg-blue-600"
+            onClick={() => setIsSummaryOpen(true)}
+          >
+            Summary
+          </button>
+        </div>
       </div>
+
+      {isSummaryOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+          <div className="relative w-1/2 bg-white rounded-lg p-4">
+            <button
+              onClick={() => setIsSummaryOpen(false)}
+              className="absolute rounded-full h-6 w-6 right-2 top-1 text-red-500 text-3xl"
+            >
+              <IoIosCloseCircle />
+            </button>
+            <SummaryPopup />
+          </div>
+        </div>
+      )}
 
       {isModelOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">

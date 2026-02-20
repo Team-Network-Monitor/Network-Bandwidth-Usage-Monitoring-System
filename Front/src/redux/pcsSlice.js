@@ -56,10 +56,18 @@ const pcsSlice = createSlice({
         sendMacToBackend(action.payload.mac);
       }
     },
+    removeMac: (state, action) => {
+      const obj = state.pcs.find((pc) => pc.id === action.payload.id);
+      if (obj) {
+        obj.mac = "00:00:00:00:00:00";
+        savePCsToStorage(state.pcs);
+        // No sendMacToBackend call here
+      }
+    },
   },
 });
 
 export const getMacs = (state) => state.pcs.pcs;
 
-export const { updatePC, addMac } = pcsSlice.actions;
+export const { updatePC, addMac, removeMac } = pcsSlice.actions;
 export default pcsSlice.reducer;

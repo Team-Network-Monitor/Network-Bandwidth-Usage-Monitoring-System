@@ -1,75 +1,77 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useSelector } from "react-redux";
-import BlacklistedSites from "./components/BlacklistedSites";
-import LiveNetworkActivity from "./components/LiveNetworkActivity";
-import HighBandwidthUsage from "./components/HighBandwidthUsage";
 import { FaPlay, FaStop } from "react-icons/fa6";
 import React from "react";
-import PCsStatus from "./components/PCsStatus";
-import { FaCircleChevronLeft, FaCircleChevronRight } from "react-icons/fa6";
-import { IoIosCloseCircle } from "react-icons/io";
-import pcImage from "./components/assets/pciamge.png";
-import { BiEditAlt } from "react-icons/bi";
-import PCPopupWindow from "./components/PCPopupWindow";
-import AddBlackListPopupWindow from "./AddBlackListPopupWindow";
-import UpdatePCForm from "./components/UpdatePCForm";
-import SummaryPopup from "./components/SummaryPopup";
 import axios from "axios";
+import PCMonitorTab from "./PCMonitorTab";
+import AlertsTab from "./AlertsTab";
+import ConfigTab from "./ConfigTab";
 
-// const mockPCsa = Array.from({ length: 100 }, (_, i) => ({
-//   id: `PC-${i + 1}`,
-//   status:
-//     Math.random() > 0.8
-//       ? "disconnected"
-//       : Math.random() > 0.6
-//       ? "restricted"
-//       : "active",
-// }));
-
-const mockNetworkActivity = [
-  { ip: "lms.jfn.ac.lk", pcs: 89, usage: 75822 },
-  { ip: "codeshare.io", pcs: 7, usage: 54621 },
-  { ip: "chatgpt.com", pcs: 3, usage: 21648 },
-  { ip: "gemini.com", pcs: 3, usage: 1463 },
-];
-
-const mockHighBandwidth = [
-  { id: "PC-05", usage: 73414 },
-  { id: "PC-61", usage: 47523 },
-];
-
-const blackList = [
-  { name: "chatgpt", count: 7 },
-  { name: "Gemini", count: 3 },
+const TABS = [
+  { id: "monitor", label: "PC Monitor" },
+  { id: "alerts", label: "Alerts" },
+  { id: "config", label: "Config" },
 ];
 
 const labOptions = [
-  { value: "All", label: "All: 100 PCs", row: 4 },
-  { value: "CSL3", label: "CSL3: 1-50 PCs", row: 2 },
-  { value: "CSL4", label: "CSL4: 51-100", row: 2 },
-  { value: "CSL3.1", label: "CSL3.1: 1-25 PCs", row: 1 },
-  { value: "CSL3.2", label: "CSL3.2: 26-50 PCs", row: 1 },
-  { value: "CSL4.1", label: "CSL4.1: 51-75 PCs", row: 1 },
-  { value: "CSL4.2", label: "CSL4.2: 76-100 PCs", row: 1 },
+  { value: "All", label: "All: 100 PCs" },
+  { value: "CSL3", label: "CSL3: 1-50 PCs" },
+  { value: "CSL4", label: "CSL4: 51-100" },
+  { value: "CSL3.1", label: "CSL3.1: 1-25 PCs" },
+  { value: "CSL3.2", label: "CSL3.2: 26-50 PCs" },
+  { value: "CSL4.1", label: "CSL4.1: 51-75 PCs" },
+  { value: "CSL4.2", label: "CSL4.2: 76-100 PCs" },
 ];
 
 const NetworkDashboard = () => {
   const [isRunning, setIsRunning] = useState(false);
   const [timer, setTimer] = useState(0);
-  const [selectedLab, setSelectedLab] = useState("All");
-  const [noOfRows, setNoOfRows] = useState(4);
-  const [isModelOpen, setIsModelOpen] = useState(null);
-  const [isModel2Open, setIsModel2Open] = useState(null);
-  const [selectedId, setSelectedId] = useState(null);
-  const [isOpenForm, setIsOpenForm] = useState(false);
-  const [isPCFormOpen, setIsPCFormOpen] = useState(false);
-  const [isSummaryOpen, setIsSummaryOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState("monitor");
+  const [error, setError] = useState("");
+  const [alertCount, setAlertCount] = useState(0);
+
+  // Background poll to keep the tab badge count fresh
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const res = await axios.get("http://127.0.0.1:5000/alerts");
+        setAlertCount(res.data.total_alerts || 0);
+      } catch (_) {}
+    };
+    poll();
+    const id = setInterval(poll, 10000);
+    return () => clearInterval(id);
+  }, []);
 
   const mockPCs = useSelector((state) => state.pcs.pcs);
-  const [filteredPCs, setFilteredPCs] = useState(mockPCs);
-  console.log("hfoisf, : ", filteredPCs);
+  const [selectedLab, setSelectedLab] = useState("All");
+  const [noOfRows, setNoOfRows] = useState(4);
 
-  console.log("hello", mockPCs);
+  // Derived reactively from Redux — updates instantly when any PC's MAC changes
+  const filteredPCs = useMemo(() => {
+    switch (selectedLab) {
+      case "CSL3":   return mockPCs.slice(0, 50);
+      case "CSL4":   return mockPCs.slice(50, 100);
+      case "CSL3.1": return mockPCs.slice(0, 25);
+      case "CSL3.2": return mockPCs.slice(25, 50);
+      case "CSL4.1": return mockPCs.slice(50, 75);
+      case "CSL4.2": return mockPCs.slice(75, 100);
+      default:       return mockPCs;
+    }
+  }, [mockPCs, selectedLab]);
+
+  const handleLabChange = (value) => {
+    setSelectedLab(value);
+    switch (value) {
+      case "CSL3":   setNoOfRows(2); break;
+      case "CSL4":   setNoOfRows(2); break;
+      case "CSL3.1": setNoOfRows(1); break;
+      case "CSL3.2": setNoOfRows(1); break;
+      case "CSL4.1": setNoOfRows(1); break;
+      case "CSL4.2": setNoOfRows(1); break;
+      default:       setNoOfRows(4); break;
+    }
+  };
 
   useEffect(() => {
     let interval;
@@ -83,46 +85,9 @@ const NetworkDashboard = () => {
     return () => clearInterval(interval);
   }, [isRunning]);
 
-  useEffect(() => {
-    switch (selectedLab) {
-      case "All":
-        setFilteredPCs(mockPCs);
-        setNoOfRows(4);
-        break;
-      case "CSL3":
-        setFilteredPCs(mockPCs.slice(0, 50));
-        setNoOfRows(2);
-        break;
-      case "CSL4":
-        setFilteredPCs(mockPCs.slice(50, 100));
-        setNoOfRows(2);
-        break;
-      case "CSL3.1":
-        setFilteredPCs(mockPCs.slice(0, 25));
-        setNoOfRows(1);
-        break;
-      case "CSL3.2":
-        setFilteredPCs(mockPCs.slice(25, 50));
-        setNoOfRows(1);
-        break;
-      case "CSL4.1":
-        setFilteredPCs(mockPCs.slice(50, 75));
-        setNoOfRows(1);
-        break;
-      case "CSL4.2":
-        setFilteredPCs(mockPCs.slice(75, 100));
-        setNoOfRows(1);
-        break;
-      default:
-        setFilteredPCs(mockPCs);
-    }
-  }, [selectedLab]);
-
-  const [error, setError] = useState("");
-
   const start = async () => {
     try {
-      const response = await axios.get(`http://127.0.0.1:5000/start`);
+      await axios.get(`http://127.0.0.1:5000/start`);
     } catch (err) {
       setError("Error start");
       console.error(err);
@@ -131,7 +96,7 @@ const NetworkDashboard = () => {
 
   const stop = async () => {
     try {
-      const response = await axios.get(`http://127.0.0.1:5000/stop`);
+      await axios.get(`http://127.0.0.1:5000/stop`);
     } catch (err) {
       setError("Error stop");
       console.error(err);
@@ -146,7 +111,7 @@ const NetworkDashboard = () => {
     }
     setIsRunning(!isRunning);
     if (!isRunning) {
-      setTimer(0); // Reset timer when starting
+      setTimer(0);
     }
   };
 
@@ -157,61 +122,17 @@ const NetworkDashboard = () => {
     return `${hrs}:${mins}:${secs}`;
   };
 
-  const handleClickPC = (id) => {
-    setSelectedId(id);
-    setIsModelOpen(true);
-  };
-
-  const handleClickIpAddButton = () => {
-    setIsModelOpen(true);
-    setIsOpenForm(true);
-  };
-
-  const closeModal = () => {
-    setIsModelOpen(false);
-    setSelectedId(null);
-    setIsOpenForm(false);
-  };
-
-  const closeModal2 = () => {
-    setIsModel2Open(false);
-    setIsPCFormOpen(false);
-  };
-
-  const openModal2 = () => {
-    setIsModel2Open(true);
-    setIsPCFormOpen(true);
-  };
-
-  const showPreviousPC = () => {
-    // Extract the number from "PC-45"
-    const currentNumber = parseInt(selectedId.replace("PC-", ""), 10);
-
-    if (!isNaN(currentNumber)) {
-      const newNumber = currentNumber > 1 ? currentNumber - 1 : 100;
-      setSelectedId(`PC-${newNumber}`);
-    }
-  };
-
-  const showNextPC = () => {
-    // Extract the number from "PC-45"
-    const currentNumber = parseInt(selectedId.replace("PC-", ""), 10);
-
-    if (!isNaN(currentNumber)) {
-      const newNumber = currentNumber < 100 ? currentNumber + 1 : 1;
-      setSelectedId(`PC-${newNumber}`);
-    }
-  };
-
   return (
     <div>
+      {/* Header */}
       <header className="bg-blue-700 text-white text-center py-4">
-        <h1 className="font-black text-3xl ">Network Monitoring Dashboard</h1>
-        <h2 className=" text-xl">DCS CSL3 & CSL4</h2>
+        <h1 className="font-black text-3xl">Network Monitoring Dashboard</h1>
+        <h2 className="text-xl">DCS CSL3 & CSL4</h2>
       </header>
 
-      <div className="text-xl justify-between flex w-[96vw]  m-auto  py-4 pt-10">
-        <div className="ml-2 relative group  flex justify-center items-center self-center ">
+      {/* Top Bar: Start/Stop + Filter */}
+      <div className="text-xl flex w-[96vw] m-auto py-4 pt-6 items-center justify-between">
+        <div className="ml-2 flex items-center gap-3">
           <div className="bg-blue-500 p-2 rounded-md">
             {!isRunning ? (
               <FaPlay
@@ -226,163 +147,74 @@ const NetworkDashboard = () => {
             )}
           </div>
           {isRunning && (
-            <div className="text-red-500 ml-2 font-bold">
-              {formatTime(timer)}
-            </div>
+            <div className="text-red-500 font-bold">{formatTime(timer)}</div>
           )}
-          {/* <FaPlay className="hover:cursor-pointer"  /> */}
-          {/* "Start" text that appears on hover over the play button */}
-          {/* <span className="absolute bottom-full left-1/2 transform -translate-x-1/2 text-center text-sm opacity-0 group-hover:opacity-100  transition-opacity duration-300 mb-2">
-            Start
-          </span> */}
         </div>
 
-        <div className="self-center">
-          {/* <input
-            type="text"
-            placeholder="Find PC..."
-            className="px-2 py-[1px] text-lg border-blue-500 border-4 rounded-lg mx-1"
-          /> */}
-          <select
-            value={selectedLab}
-            onChange={(e) => setSelectedLab(e.target.value)}
-            className="px-2 py-1 mx-1 rounded-lg bg-blue-500 text-lg hover:cursor-pointer text-white"
-          >
-            {labOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <button
-            className="px-3 py-1 rounded-lg bg-green-500 text-white ml-1 mr-2 "
-            onClick={() => handleClickIpAddButton()}
-          >
-            Add Blacklist
-          </button>
-        </div>
-      </div>
-      <div className="w-[96vw] m-auto ">
-        <PCsStatus
-          mockPCs={mockPCs}
-          mockNetworkActivity={mockNetworkActivity}
-          mockHighBandwidth={mockHighBandwidth}
-          selectedLab={selectedLab}
-          filteredPCs={filteredPCs}
-          noOfRows={noOfRows}
-          setClicked={handleClickPC}
-        />
-        <div className="grid grid-cols-4 gap-2 mt-2">
-          <div className="">
-            <BlacklistedSites sites={blackList} />
-          </div>
-          <div className="col-span-2">
-            {/* <LiveNetworkActivity activities={mockNetworkActivity} /> */}
-          </div>
-          <div className="">
-            {/* <HighBandwidthUsage pcs={mockHighBandwidth} /> */}
-            <div className="py-2 px-14">
-              <div className="flex items-center gap-4">
-                <div className="h-4 w-4 bg-red-500 rounded-full"></div>{" "}
-                <span>Restricted Activity</span>
-              </div>
-
-              <div className="flex items-center gap-4">
-                <div className="h-4 w-4 bg-green-500 rounded-full"></div>{" "}
-                <span>Active Normal Operation</span>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="h-4 w-4 bg-gray-500 rounded-full"></div>{" "}
-                <span>Disconnected PCs</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div className="flex justify-center mt-4">
-          <button
-            className="px-4 py-2 rounded-lg bg-blue-500 text-white hover:bg-blue-600"
-            onClick={() => setIsSummaryOpen(true)}
-          >
-            Summary
-          </button>
-        </div>
+        <select
+          value={selectedLab}
+          onChange={(e) => handleLabChange(e.target.value)}
+          className="px-2 py-1 rounded-lg bg-blue-500 text-lg hover:cursor-pointer text-white"
+        >
+          {labOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
       </div>
 
-      {isSummaryOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-          <div className="relative w-1/2 bg-white rounded-lg p-4">
-            <button
-              onClick={() => setIsSummaryOpen(false)}
-              className="absolute rounded-full h-6 w-6 right-2 top-1 text-red-500 text-3xl"
-            >
-              <IoIosCloseCircle />
-            </button>
-            <SummaryPopup />
-          </div>
-        </div>
-      )}
-
-      {isModelOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-          <div className="relative w-1/4  border-4  bg-white rounded-lg pb-4">
-            <button
-              onClick={closeModal}
-              className="absolute rounded-full h-6 w-6 right-2 top-1 text-red-500 text-3xl"
-            >
-              <IoIosCloseCircle />
-            </button>
-
-            {selectedId && (
-              <>
-                {/* Navigation Buttons */}
-                <button
-                  onClick={showPreviousPC}
-                  className="absolute -left-16 top-1/2 transform -translate-y-1/2 text-white text-4xl"
-                >
-                  <FaCircleChevronLeft />
-                </button>
-                <button
-                  onClick={showNextPC}
-                  className="absolute -right-16 top-1/2 transform -translate-y-1/2 text-white text-4xl"
-                >
-                  <FaCircleChevronRight />
-                </button>
-                <PCPopupWindow
-                  selectedId={selectedId}
-                  // Find the specific usage data for this PC from your mock data or Redux
-                  usageData={mockHighBandwidth.find(pc => pc.id === selectedId) || { usage: 0 }}
-
-                  mockNetworkActivity={mockNetworkActivity}
-                  openModal2={openModal2}
-                />
-                {isModel2Open && (
-                  <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-                    <div className="relative w-1/4  border-4 border-red-500 bg-white rounded-lg pb-4">
-                      <button
-                        onClick={closeModal2}
-                        className="absolute rounded-full h-6 w-6 right-2 top-1 text-red-500 text-3xl"
-                      >
-                        <IoIosCloseCircle />
-                      </button>
-                      <UpdatePCForm
-                        closePopup={setIsModel2Open}
-                        selectedId={selectedId}
-                        setSelectedId={setSelectedId}
-                      />
-                    </div>
-                  </div>
+      {/* Tab Bar */}
+      <div className="w-[96vw] m-auto">
+        <div className="border-b border-gray-300">
+          <div className="flex gap-1">
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`px-6 py-2 text-base font-semibold rounded-t-lg transition-colors duration-150 flex items-center gap-2 ${
+                  activeTab === tab.id
+                    ? "bg-blue-600 text-white border border-b-0 border-blue-600"
+                    : "bg-gray-100 text-gray-600 border border-gray-300 hover:bg-blue-50 hover:text-blue-600"
+                }`}
+              >
+                {tab.label}
+                {tab.id === "alerts" && alertCount > 0 && (
+                  <span className="bg-red-500 text-white text-xs font-bold rounded-full px-2 py-0.5 min-w-[20px] text-center">
+                    {alertCount}
+                  </span>
                 )}
-              </>
-            )}
-
-            {isOpenForm && (
-              <>
-                <AddBlackListPopupWindow />
-              </>
-            )}
+              </button>
+            ))}
           </div>
         </div>
-      )}
+      </div>
+
+      {/* Tab Content */}
+      <div className="w-[96vw] m-auto pt-4">
+        {activeTab === "monitor" && (
+          <PCMonitorTab
+            mockPCs={mockPCs}
+            selectedLab={selectedLab}
+            filteredPCs={filteredPCs}
+            noOfRows={noOfRows}
+          />
+        )}
+        {activeTab === "alerts" && (
+          <AlertsTab
+            onAlertCount={setAlertCount}
+            selectedLab={selectedLab}
+          />
+        )}
+        {activeTab === "config" && (
+          <ConfigTab
+            mockPCs={mockPCs}
+            selectedLab={selectedLab}
+            filteredPCs={filteredPCs}
+            noOfRows={noOfRows}
+          />
+        )}
+      </div>
     </div>
   );
 };

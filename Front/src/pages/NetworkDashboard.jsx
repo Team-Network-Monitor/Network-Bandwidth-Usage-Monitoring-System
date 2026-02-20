@@ -6,11 +6,13 @@ import axios from "axios";
 import PCMonitorTab from "./PCMonitorTab";
 import AlertsTab from "./AlertsTab";
 import ConfigTab from "./ConfigTab";
+import AnalysisTab from "./AnalysisTab";
 
 const TABS = [
-  { id: "monitor", label: "PC Monitor" },
-  { id: "alerts", label: "Alerts" },
-  { id: "config", label: "Config" },
+  { id: "monitor",  label: "PC Monitor" },
+  { id: "alerts",   label: "Alerts" },
+  { id: "analysis", label: "Analysis" },
+  { id: "config",   label: "Config" },
 ];
 
 const labOptions = [
@@ -204,6 +206,12 @@ const NetworkDashboard = () => {
           <AlertsTab
             onAlertCount={setAlertCount}
             selectedLab={selectedLab}
+          />
+        )}
+        {activeTab === "analysis" && (
+          <AnalysisTab
+            selectedLab={selectedLab}
+            filteredPCs={filteredPCs}
           />
         )}
         {activeTab === "config" && (

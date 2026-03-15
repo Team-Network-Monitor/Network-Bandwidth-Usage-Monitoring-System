@@ -6,7 +6,7 @@ import PCPopupWindow from "./components/PCPopupWindow";
 
 const PCMonitorTab = ({ mockPCs, selectedLab, filteredPCs, noOfRows }) => {
   const [isModelOpen, setIsModelOpen] = useState(false);
-  const [selectedId, setSelectedId] = useState(null);
+  const [selectedId,  setSelectedId]  = useState(null);
 
   const handleClickPC = (id) => {
     setSelectedId(id);
@@ -18,24 +18,24 @@ const PCMonitorTab = ({ mockPCs, selectedLab, filteredPCs, noOfRows }) => {
     setSelectedId(null);
   };
 
+  // Navigate within filteredPCs so prev/next stays in the current lab view
   const showPreviousPC = () => {
-    const currentNumber = parseInt(selectedId.replace("PC-", ""), 10);
-    if (!isNaN(currentNumber)) {
-      const newNumber = currentNumber > 1 ? currentNumber - 1 : 100;
-      setSelectedId(`PC-${newNumber}`);
-    }
+    const idx = filteredPCs.findIndex((pc) => pc.id === selectedId);
+    if (idx === -1) return;
+    const prev = filteredPCs[idx > 0 ? idx - 1 : filteredPCs.length - 1];
+    setSelectedId(prev.id);
   };
 
   const showNextPC = () => {
-    const currentNumber = parseInt(selectedId.replace("PC-", ""), 10);
-    if (!isNaN(currentNumber)) {
-      const newNumber = currentNumber < 100 ? currentNumber + 1 : 1;
-      setSelectedId(`PC-${newNumber}`);
-    }
+    const idx = filteredPCs.findIndex((pc) => pc.id === selectedId);
+    if (idx === -1) return;
+    const next = filteredPCs[idx < filteredPCs.length - 1 ? idx + 1 : 0];
+    setSelectedId(next.id);
   };
 
   return (
-    <div className="w-[96vw] m-auto">
+    <div style={{ width: "96vw", margin: "0 auto" }}>
+
       {/* PC Grid */}
       <PCsStatus
         mockPCs={mockPCs}
@@ -46,53 +46,84 @@ const PCMonitorTab = ({ mockPCs, selectedLab, filteredPCs, noOfRows }) => {
       />
 
       {/* Legend */}
-      <div className="flex justify-end mt-2 py-2 px-4 gap-8">
-        <div className="flex items-center gap-2">
-          <div className="h-4 w-4 bg-red-500 rounded-full"></div>
-          <span>Blacklist Accessed</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="h-4 w-4 bg-orange-500 rounded-full"></div>
-          <span>Limit Exceeded</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="h-4 w-4 bg-green-500 rounded-full"></div>
-          <span>Active Normal Operation</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="h-4 w-4 bg-gray-500 rounded-full"></div>
-          <span>Disconnected PCs</span>
-        </div>
+      <div style={{
+        display: "flex", justifyContent: "flex-end", gap: "24px",
+        padding: "10px 16px", marginTop: "8px",
+        fontFamily: "'JetBrains Mono', monospace", fontSize: "11px", color: "#4a5580",
+      }}>
+        {[
+          { color: "#f87171", label: "Blacklist Accessed" },
+          { color: "#f97316", label: "Limit Exceeded" },
+          { color: "#4ade80", label: "Active Normal" },
+          { color: "#6b7280", label: "Disconnected" },
+        ].map(({ color, label }) => (
+          <div key={label} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <div style={{ width: "10px", height: "10px", borderRadius: "50%", background: color }} />
+            <span>{label}</span>
+          </div>
+        ))}
       </div>
 
-      {/* PC Detail Modal */}
+      {/* Modal */}
       {isModelOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-          <div className="relative w-1/4 border-4 bg-white rounded-lg pb-4">
+        <div style={{
+          position: "fixed", inset: 0,
+          background: "rgba(0,0,0,0.85)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          zIndex: 50,
+        }}>
+          <div style={{ position: "relative", width: "55vw", maxWidth: "900px" }}>
+
+            {/* Prev button */}
             <button
-              onClick={closeModal}
-              className="absolute rounded-full h-6 w-6 right-2 top-1 text-red-500 text-3xl"
+              onClick={showPreviousPC}
+              style={{
+                position: "absolute", left: "-52px", top: "50%",
+                transform: "translateY(-50%)",
+                background: "none", border: "none", cursor: "pointer",
+                color: "#00c2ff", fontSize: "2.2rem", lineHeight: 1,
+              }}
             >
-              <IoIosCloseCircle />
+              <FaCircleChevronLeft />
             </button>
 
-            {selectedId && (
-              <>
-                <button
-                  onClick={showPreviousPC}
-                  className="absolute -left-16 top-1/2 transform -translate-y-1/2 text-white text-4xl"
-                >
-                  <FaCircleChevronLeft />
-                </button>
-                <button
-                  onClick={showNextPC}
-                  className="absolute -right-16 top-1/2 transform -translate-y-1/2 text-white text-4xl"
-                >
-                  <FaCircleChevronRight />
-                </button>
-                <PCPopupWindow selectedId={selectedId} />
-              </>
-            )}
+            {/* Modal card */}
+            <div style={{
+              background: "#080b14",
+              border: "1px solid #1e2540",
+              borderRadius: "10px",
+              maxHeight: "88vh",
+              overflowY: "auto",
+              position: "relative",
+            }}>
+              {/* Close button */}
+              <button
+                onClick={closeModal}
+                style={{
+                  position: "absolute", top: "10px", right: "12px",
+                  background: "none", border: "none", cursor: "pointer",
+                  color: "#ff4f6a", fontSize: "1.6rem", lineHeight: 1, zIndex: 10,
+                }}
+              >
+                <IoIosCloseCircle />
+              </button>
+
+              {selectedId && <PCPopupWindow selectedId={selectedId} />}
+            </div>
+
+            {/* Next button */}
+            <button
+              onClick={showNextPC}
+              style={{
+                position: "absolute", right: "-52px", top: "50%",
+                transform: "translateY(-50%)",
+                background: "none", border: "none", cursor: "pointer",
+                color: "#00c2ff", fontSize: "2.2rem", lineHeight: 1,
+              }}
+            >
+              <FaCircleChevronRight />
+            </button>
+
           </div>
         </div>
       )}

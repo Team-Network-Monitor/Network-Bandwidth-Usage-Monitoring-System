@@ -1,239 +1,291 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState } from "react";
 import pcImage from "./assets/pciamge.png";
 import { useSelector } from "react-redux";
 import axios from "axios";
 
-const SEVERITY_BADGE = {
-  high: "bg-red-500 text-white",
-  medium: "bg-orange-400 text-white",
-  low: "bg-gray-400 text-white",
-};
-
-const TYPE_LABEL = {
-  inactive: "Inactive",
-  high_usage: "High Usage",
-  blacklist: "Blacklist",
-};
-
 const FETCH_INTERVAL = 3000;
 
-function formatBytes(bytes, isSpeed = false) {
-  if (!bytes || bytes === 0) return isSpeed ? "0 B/s" : "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let index = 0;
-  while (bytes >= 1024 && index < units.length - 1) {
-    bytes /= 1024;
-    index++;
-  }
-  return `${bytes.toFixed(2)} ${units[index]}${isSpeed ? "/s" : ""}`;
+function fmtBytes(b) {
+  try { b = parseFloat(b); } catch { return "0 B"; }
+  if (!b || b === 0) return "0 B";
+  if (b >= 1024 ** 3) return `${(b / 1024 ** 3).toFixed(2)} GB`;
+  if (b >= 1024 ** 2) return `${(b / 1024 ** 2).toFixed(2)} MB`;
+  if (b >= 1024)      return `${(b / 1024).toFixed(2)} KB`;
+  return `${b.toFixed(0)} B`;
 }
 
-// Merge download + upload domains into a combined list sorted by total bytes
-function mergeTraffic(download = {}, upload = {}) {
-  const merged = {};
-  for (const [domain, data] of Object.entries(download)) {
-    merged[domain] = { domain, download: data.total_bytes, upload: 0, protocols: data.protocols };
-  }
-  for (const [domain, data] of Object.entries(upload)) {
-    if (merged[domain]) {
-      merged[domain].upload = data.total_bytes;
-    } else {
-      merged[domain] = { domain, download: 0, upload: data.total_bytes, protocols: data.protocols };
-    }
-  }
-  return Object.values(merged).sort(
-    (a, b) => (b.download + b.upload) - (a.download + a.upload)
-  );
-}
+function fmtSpeed(bps) { return fmtBytes(bps) + "/s"; }
 
 const PCPopupWindow = ({ selectedId }) => {
-  const allPCs = useSelector((state) => state.pcs.pcs);
+  const allPCs     = useSelector((state) => state.pcs.pcs);
   const selectedPC = allPCs.find((pc) => pc.id === selectedId);
 
-  const [pcData, setPcData] = useState(null);
-  const [error, setError] = useState(null);
+  const [pcData,   setPcData]   = useState(null);
   const [pcAlerts, setPcAlerts] = useState([]);
-  const [downloadSpeed, setDownloadSpeed] = useState("0 B/s");
-  const [uploadSpeed, setUploadSpeed] = useState("0 B/s");
-  const lastTotalRef = useRef(0);
+  const [error,    setError]    = useState(null);
 
-  // Fetch network data for this PC
+  // ── Reset on every PC change ──────────────────────────────────────────────
+  useEffect(() => {
+    setPcData(null);
+    setError(null);
+    setPcAlerts([]);
+  }, [selectedId]);   // ← clears stale data before new fetch fires
+
+  // ── Fetch agent data ──────────────────────────────────────────────────────
   useEffect(() => {
     if (!selectedPC?.mac || selectedPC.mac === "00:00:00:00:00:00") return;
-
-    const fetchData = async () => {
+    const fetch_ = async () => {
       try {
         const res = await axios.get(`http://127.0.0.1:5000/data/${selectedPC.mac}`);
-        const data = res.data;
-
-        // Use live speed fields from API directly
-        setDownloadSpeed(formatBytes(data.download_speed ?? 0, true));
-        setUploadSpeed(formatBytes(data.upload_speed ?? 0, true));
-
-        setPcData(data);
-        lastTotalRef.current = data.total_usage ?? 0;
+        setPcData(res.data);
         setError(null);
-      } catch (err) {
-        setError("Error fetching data");
-        console.error(err);
-      }
+      } catch { setError("Agent offline"); }
     };
-
-    fetchData();
-    const interval = setInterval(fetchData, FETCH_INTERVAL);
-    return () => {
-      clearInterval(interval);
-      lastTotalRef.current = 0;
-    };
+    fetch_();
+    const id = setInterval(fetch_, FETCH_INTERVAL);
+    return () => clearInterval(id);
   }, [selectedPC?.mac]);
 
-  // Fetch alerts filtered by this PC's MAC
+  // ── Fetch alerts ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!selectedPC?.mac || selectedPC.mac === "00:00:00:00:00:00") return;
-
-    const fetchAlerts = async () => {
+    const fetch_ = async () => {
       try {
-        const res = await axios.get("http://127.0.0.1:5000/alerts");
-        const SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
-        const filtered = (res.data.alerts || [])
-          .filter((a) => a.mac === selectedPC.mac)
-          .sort((a, b) => (SEVERITY_RANK[a.severity] ?? 3) - (SEVERITY_RANK[b.severity] ?? 3));
-        setPcAlerts(filtered);
-      } catch (err) {
-        console.error("Error fetching alerts:", err);
-      }
+        const res  = await axios.get("http://127.0.0.1:5000/alerts");
+        const RANK = { high: 0, medium: 1, low: 2 };
+        setPcAlerts(
+          (res.data.alerts || [])
+            .filter((a) => a.mac === selectedPC.mac)
+            .sort((a, b) => (RANK[a.severity] ?? 3) - (RANK[b.severity] ?? 3))
+        );
+      } catch (_) {}
     };
-
-    fetchAlerts();
-    const interval = setInterval(fetchAlerts, 5000);
-    return () => clearInterval(interval);
+    fetch_();
+    const id = setInterval(fetch_, 5000);
+    return () => clearInterval(id);
   }, [selectedPC?.mac]);
 
-  const trafficList = pcData ? mergeTraffic(pcData.download, pcData.upload) : [];
+  useEffect(() => {
+    if (!selectedPC?.mac || selectedPC.mac === "00:00:00:00:00:00") return;
+    const fetch_ = async () => {
+      try {
+        const res  = await axios.get("http://127.0.0.1:5000/alerts");
+        const RANK = { high: 0, medium: 1, low: 2 };
+        setPcAlerts(
+          (res.data.alerts || [])
+            .filter((a) => a.mac === selectedPC.mac)
+            .sort((a, b) => (RANK[a.severity] ?? 3) - (RANK[b.severity] ?? 3))
+        );
+      } catch (_) {}
+    };
+    fetch_();
+    const id = setInterval(fetch_, 5000);
+    return () => clearInterval(id);
+  }, [selectedPC?.mac]);
+
   const unassigned = selectedPC?.mac === "00:00:00:00:00:00";
+  const isOnline   = pcData && (Date.now() / 1000 - pcData.timestamp) <= 10;
+  const state      = pcData?.state ?? "sending";
+
+  const processes  = pcData?.process ?? [];
+  const dnsList    = pcData?.dns     ?? [];
+
+  const maxSpeed = Math.max(
+    ...processes.map((p) => (p.speed?.upload ?? 0) + (p.speed?.download ?? 0)),
+    1
+  );
+
+  const SEVERITY = {
+    high:   { bg: "#ff4f6a22", border: "#ff4f6a55", badge: "#ff4f6a", text: "#ff4f6a" },
+    medium: { bg: "#ffaa0022", border: "#ffaa0055", badge: "#ffaa00", text: "#ffaa00" },
+    low:    { bg: "#4a558022", border: "#4a558055", badge: "#4a5580", text: "#4a5580" },
+  };
+
+  const TYPE_LABEL = { inactive: "Inactive", high_usage: "High Usage", blacklist: "Blacklist" };
 
   return (
-    <div className="p-4">
-      {/* Title */}
-      <h1 className="text-center text-4xl font-black text-blue-500 mb-2">{selectedId}</h1>
+    <div style={{ fontFamily: "'JetBrains Mono', monospace", color: "#e2e8f0", height: "100%", overflowY: "auto", background: "#080b14" }}>
 
-      {/* PC Image */}
-      <div className="relative group">
-        <img src={pcImage} alt="PC" width="160px" className="m-auto opacity-90 group-hover:opacity-100 transition-opacity" />
-        {pcData?.hostname && (
-          <div className="absolute top-0 right-10 bg-blue-100 text-blue-600 text-xs px-2 py-1 rounded-full border border-blue-300">
-            {pcData.hostname}
-          </div>
+      {/* ── Agent header ── */}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "12px", background: "#0e1221", border: "1px solid #1e2540", borderBottom: "none", borderRadius: "10px 10px 0 0", padding: "14px 20px" }}>
+        <img src={pcImage} alt="PC" style={{ width: "36px", opacity: isOnline ? 1 : 0.4, filter: isOnline ? "none" : "grayscale(80%)" }} />
+
+        <span style={{ fontFamily: "'Syne', sans-serif", fontSize: "1.1rem", fontWeight: 700, color: "#e2e8f0" }}>
+          {pcData?.hostname || selectedId}
+        </span>
+
+        {pcData?.os && (
+          <span style={{ fontSize: "10px", padding: "3px 10px", borderRadius: "20px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", background: "#0e2a3a", color: "#00c2ff", border: "1px solid #1a4a60" }}>
+            {pcData.os}
+          </span>
         )}
+
+        <span style={{ fontSize: "10px", padding: "3px 10px", borderRadius: "20px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", ...(isOnline ? { background: "#0e2a1a", color: "#00ffb2", border: "1px solid #1a4a2a" } : { background: "#2a1e0e", color: "#ffaa00", border: "1px solid #4a3a1a" }) }}>
+          {isOnline ? "live" : "offline"}
+        </span>
+
+        <span style={{ fontSize: "10px", padding: "3px 10px", borderRadius: "20px", fontWeight: 600, letterSpacing: "0.08em", marginLeft: "auto", background: "#141828", color: "#4a5580", border: "1px solid #1e2540" }}>
+          {selectedId}
+        </span>
       </div>
 
-      {/* MAC + IP */}
-      <div className="flex flex-col items-center text-blue-500 -mt-2 mb-4">
-        <h2 className="text-xl font-bold font-mono bg-blue-50 px-3 py-1 rounded-lg border border-blue-200">
-          {selectedPC?.mac}
-        </h2>
-        <h3 className="font-mono text-sm text-blue-400 mt-1">
-          IP: {pcData?.ip || "Detecting..."}
-        </h3>
+      {/* ── Identity row ── */}
+      <div style={{ display: "flex", flexWrap: "wrap", border: "1px solid #1e2540", borderTop: "1px solid #1a2040", borderBottom: "none", background: "#141828" }}>
+        {[
+          { label: "Username", value: pcData?.username ?? "—" },
+          { label: "IP Address", value: pcData?.ip ?? "—" },
+          { label: "MAC Address", value: selectedPC?.mac ?? "—" },
+          { label: "Hostname", value: pcData?.hostname ?? "—" },
+          { label: "Processes", value: processes.length },
+        ].map(({ label, value }, i, arr) => (
+          <div key={label} style={{ padding: "10px 20px", flex: 1, minWidth: "120px", borderRight: i < arr.length - 1 ? "1px solid #1e2540" : "none" }}>
+            <div style={{ fontSize: "10px", color: "#4a5580", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "4px" }}>{label}</div>
+            <div style={{ fontSize: "13px", color: "#00c2ff", fontWeight: 600 }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Speed row ── */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", border: "1px solid #1e2540", borderBottom: "none" }}>
+        {[
+          { label: "Upload Speed",      value: fmtSpeed(pcData?.usage?.upload   ?? 0), color: "#00ffb2" },
+          { label: "Download Speed",    value: fmtSpeed(pcData?.usage?.download ?? 0), color: "#00c2ff" },
+          { label: "Total Uploaded",    value: fmtBytes(pcData?.total_usage?.upload   ?? 0), color: "#5de8b8" },
+          { label: "Total Downloaded",  value: fmtBytes(pcData?.total_usage?.download ?? 0), color: "#5bb8e8" },
+        ].map(({ label, value, color }, i) => (
+          <div key={label} style={{ padding: "18px 20px", borderRight: i < 3 ? "1px solid #1e2540" : "none", background: "#0e1221" }}>
+            <div style={{ fontSize: "10px", color: "#4a5580", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "8px" }}>{label}</div>
+            <div style={{ fontSize: "1.3rem", fontWeight: 600, color }}>{value}</div>
+          </div>
+        ))}
       </div>
 
       {unassigned ? (
-        <div className="text-center py-8 text-gray-400 text-sm">
+        <div style={{ textAlign: "center", padding: "3rem", color: "#4a5580", fontSize: "13px", border: "1px solid #1e2540", borderRadius: "0 0 10px 10px" }}>
           Assign a MAC address to view network data.
+        </div>
+      ) : error ? (
+        <div style={{ textAlign: "center", padding: "3rem", color: "#ff4f6a", fontSize: "13px", border: "1px solid #1e2540", borderRadius: "0 0 10px 10px" }}>
+          {error}
         </div>
       ) : (
         <>
-          {/* BANDWIDTH & USAGE */}
-          <div className="grid grid-cols-3 gap-2 mx-4 mb-4">
-            <div className="bg-blue-600 rounded-xl p-3 text-white shadow-lg">
-              <p className="text-blue-100 text-[10px] uppercase font-bold tracking-tighter">↓ Download</p>
-              <h3 className="text-lg font-black truncate">{downloadSpeed}</h3>
-            </div>
-            <div className="bg-blue-500 rounded-xl p-3 text-white shadow-lg">
-              <p className="text-blue-100 text-[10px] uppercase font-bold tracking-tighter">↑ Upload</p>
-              <h3 className="text-lg font-black truncate">{uploadSpeed}</h3>
-            </div>
-            <div className="bg-white border-2 border-blue-600 rounded-xl p-3 text-blue-600">
-              <p className="text-blue-400 text-[10px] uppercase font-bold tracking-tighter">Total</p>
-              <h3 className="text-lg font-black truncate">
-                {formatBytes(pcData?.total_usage ?? 0)}
-              </h3>
-            </div>
-          </div>
+          {/* ── Process + DNS panels ── */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", border: "1px solid #1e2540", borderRadius: "0 0 10px 10px", overflow: "hidden", marginBottom: "16px" }}>
 
-          {/* TOP DESTINATIONS */}
-          <div className="mx-4 mb-4">
-            <div className="flex justify-between items-center mb-2">
-              <h3 className="text-blue-500 font-black uppercase text-xs tracking-wider">Top Destinations</h3>
-              <span className="flex items-center gap-1 text-[10px] text-green-500 font-bold">
-                <span className="h-2 w-2 bg-green-500 rounded-full animate-pulse"></span> LIVE
-              </span>
+            {/* Process panel */}
+            <div style={{ background: "#0e1221", borderRight: "1px solid #1e2540" }}>
+              <div style={{ padding: "10px 16px", fontSize: "10px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", color: "#4a5580", borderBottom: "1px solid #1e2540", background: "#141828", display: "flex", justifyContent: "space-between" }}>
+                <span>Top Processes</span>
+                <span style={{ color: "#00c2ff" }}>{processes.length}</span>
+              </div>
+              <div style={{ overflowY: "auto", maxHeight: "300px" }}>
+                {processes.length > 0 ? (
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid #1e2540" }}>
+                        {["#", "Name", "", "Live ↑", "Live ↓", "Total"].map((h, i) => (
+                          <td key={i} style={{ padding: "6px 12px", fontSize: "10px", color: "#4a5580" }}>{h}</td>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {processes.map((proc, i) => {
+                        const spdUp = proc.speed?.upload   ?? 0;
+                        const spdDn = proc.speed?.download ?? 0;
+                        const totUp = proc.total?.upload   ?? 0;
+                        const totDn = proc.total?.download ?? 0;
+                        const barW  = Math.round(((spdUp + spdDn) / maxSpeed) * 100);
+                        return (
+                          <tr key={i} style={{ borderBottom: "1px solid #1e2540" }}>
+                            <td style={{ padding: "8px 12px", fontSize: "11px", color: "#4a5580", width: "18px" }}>{i + 1}</td>
+                            <td style={{ padding: "8px 12px", fontSize: "11px", color: "#e2e8f0", fontWeight: 600, maxWidth: "120px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={proc.name}>{proc.name}</td>
+                            <td style={{ padding: "8px 12px" }}>
+                              <div style={{ width: "60px", height: "3px", background: "#1e2540", borderRadius: "2px" }}>
+                                <div style={{ width: `${barW}%`, height: "100%", background: "#00c2ff", borderRadius: "2px" }} />
+                              </div>
+                            </td>
+                            <td style={{ padding: "8px 12px", fontSize: "11px", color: "#00ffb2" }}>{fmtSpeed(spdUp)}</td>
+                            <td style={{ padding: "8px 12px", fontSize: "11px", color: "#00c2ff" }}>{fmtSpeed(spdDn)}</td>
+                            <td style={{ padding: "8px 12px", fontSize: "10px", color: "#4a5580" }}>{fmtBytes(totUp + totDn)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div style={{ padding: "20px 16px", color: "#4a5580", fontSize: "12px" }}>
+                    {state === "ready" ? "Agent paused — no data this interval" : "No process data yet"}
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="border-t-2 border-blue-100 pt-2">
-              <div className="overflow-y-auto h-36 pr-1">
-                {trafficList.length > 0 ? (
-                  trafficList.map((item) => (
-                    <div key={item.domain} className="flex justify-between items-center bg-blue-50 border border-transparent hover:border-blue-300 rounded-lg p-2 mb-1 transition-all">
-                      <div className="truncate text-blue-700 font-medium text-xs max-w-[130px]">
-                        {item.domain}
-                        <span className="ml-1 text-[9px] text-blue-400">{item.protocols?.join(", ")}</span>
-                      </div>
-                      <div className="flex flex-col items-end gap-0.5">
-                        <span className="font-mono text-[10px] text-blue-500 bg-white px-1.5 py-0.5 rounded border">
-                          ↓ {formatBytes(item.download)}
-                        </span>
-                        <span className="font-mono text-[10px] text-blue-500 bg-white px-1.5 py-0.5 rounded border">
-                          ↑ {formatBytes(item.upload)}
-                        </span>
-                      </div>
+
+            {/* DNS panel */}
+            <div style={{ background: "#0e1221" }}>
+              <div style={{ padding: "10px 16px", fontSize: "10px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", color: "#4a5580", borderBottom: "1px solid #1e2540", background: "#141828", display: "flex", justifyContent: "space-between" }}>
+                <span>Sites Accessed</span>
+                <span style={{ color: "#00c2ff" }}>{dnsList.length}</span>
+              </div>
+              <div style={{ overflowY: "auto", maxHeight: "300px" }}>
+                {dnsList.length > 0 ? (
+                  dnsList.map((domain, i) => (
+                    <div key={i} style={{ padding: "7px 16px", fontSize: "12px", color: "#e2e8f0", borderBottom: "1px solid #1e2540", display: "flex", alignItems: "center", gap: "8px" }}>
+                      <div style={{ width: "5px", height: "5px", borderRadius: "50%", background: "#00ffb2", flexShrink: 0 }} />
+                      {domain}
                     </div>
                   ))
                 ) : (
-                  <div className="text-center py-8 text-blue-400 text-sm font-semibold">
-                    {error ? "Failed to load data" : "Analyzing packets..."}
+                  <div style={{ padding: "20px 16px", color: "#4a5580", fontSize: "12px" }}>
+                    {state === "ready" ? "Agent paused" : "No DNS queries recorded"}
                   </div>
                 )}
               </div>
             </div>
           </div>
 
-          {/* ALERTS */}
-          <div className="mx-4">
-            <div className="flex justify-between items-center mb-2">
-              <h3 className="text-blue-500 font-black uppercase text-xs tracking-wider">Alerts</h3>
+          {/* ── Alerts ── */}
+          <div style={{ background: "#0e1221", border: "1px solid #1e2540", borderRadius: "10px", overflow: "hidden" }}>
+            <div style={{ padding: "10px 16px", fontSize: "10px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", color: "#4a5580", borderBottom: "1px solid #1e2540", background: "#141828", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>Alerts</span>
               {pcAlerts.length > 0 && (
-                <span className="bg-red-500 text-white text-xs font-bold rounded-full px-2 py-0.5">
+                <span style={{ background: "#ff4f6a", color: "#080b14", fontSize: "10px", fontWeight: 700, borderRadius: "20px", padding: "1px 8px" }}>
                   {pcAlerts.length}
                 </span>
               )}
             </div>
-            <div className="border-t-2 border-blue-100 pt-2">
+            <div style={{ maxHeight: "200px", overflowY: "auto" }}>
               {pcAlerts.length === 0 ? (
-                <div className="text-center py-3 text-green-500 text-xs font-semibold">
+                <div style={{ padding: "20px 16px", color: "#00ffb2", fontSize: "12px", textAlign: "center" }}>
                   No alerts for this PC
                 </div>
               ) : (
-                <div className="flex flex-col gap-2 overflow-y-auto max-h-32">
-                  {pcAlerts.map((alert, idx) => (
-                    <div key={idx} className="flex items-start gap-2 bg-gray-50 border rounded-lg px-3 py-2">
-                      <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded shrink-0 ${SEVERITY_BADGE[alert.severity] || SEVERITY_BADGE.low}`}>
+                pcAlerts.map((alert, i) => {
+                  const s = SEVERITY[alert.severity] ?? SEVERITY.low;
+                  return (
+                    <div key={i} style={{ padding: "10px 16px", borderBottom: "1px solid #1e2540", background: s.bg, display: "flex", alignItems: "flex-start", gap: "10px" }}>
+                      <span style={{ fontSize: "10px", fontWeight: 700, padding: "2px 8px", borderRadius: "20px", background: s.badge, color: "#080b14", flexShrink: 0, textTransform: "uppercase" }}>
                         {alert.severity}
                       </span>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs font-semibold text-gray-700 truncate">{alert.message}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: "12px", fontWeight: 600, color: "#e2e8f0" }}>{alert.message}</div>
                         {alert.type === "high_usage" && (
-                          <div className="text-[10px] text-gray-500">{alert.total_usage_MB} MB / {alert.limit_MB} MB limit</div>
+                          <div style={{ fontSize: "10px", color: "#4a5580", marginTop: "2px" }}>
+                            {alert.total_usage_MB} MB / {alert.limit_MB} MB limit
+                          </div>
                         )}
                         {alert.type === "blacklist" && (
-                          <div className="text-[10px] text-gray-500">Site: {alert.site}</div>
+                          <div style={{ fontSize: "10px", color: "#4a5580", marginTop: "2px" }}>
+                            Site: {alert.site}
+                          </div>
                         )}
                       </div>
-                      <span className="text-[10px] text-gray-400 shrink-0">
+                      <span style={{ fontSize: "10px", color: "#4a5580", flexShrink: 0 }}>
                         {TYPE_LABEL[alert.type] || alert.type}
                       </span>
                     </div>
-                  ))}
-                </div>
+                  );
+                })
               )}
             </div>
           </div>

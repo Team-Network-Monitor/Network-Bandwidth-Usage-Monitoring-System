@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
 import { useSelector } from "react-redux";
-import { FaPlay, FaStop } from "react-icons/fa6";
 import React from "react";
 import axios from "axios";
 import PCMonitorTab from "./PCMonitorTab";
@@ -16,9 +15,9 @@ const TABS = [
 ];
 
 const labOptions = [
-  { value: "All", label: "All: 100 PCs" },
-  { value: "CSL3", label: "CSL3: 1-50 PCs" },
-  { value: "CSL4", label: "CSL4: 51-100" },
+  { value: "All",    label: "All: 100 PCs" },
+  { value: "CSL3",   label: "CSL3: 1-50 PCs" },
+  { value: "CSL4",   label: "CSL4: 51-100" },
   { value: "CSL3.1", label: "CSL3.1: 1-25 PCs" },
   { value: "CSL3.2", label: "CSL3.2: 26-50 PCs" },
   { value: "CSL4.1", label: "CSL4.1: 51-75 PCs" },
@@ -26,35 +25,69 @@ const labOptions = [
 ];
 
 const NetworkDashboard = () => {
-  const [isRunning, setIsRunning] = useState(false);
-  const [timer, setTimer] = useState(0);
-  const [activeTab, setActiveTab] = useState("monitor");
-  const [error, setError] = useState("");
-  const [alertCount, setAlertCount] = useState(0);
+  const [activeTab,   setActiveTab]   = useState("monitor");
+  const [alertCount,  setAlertCount]  = useState(0);
+  const [agentCount,  setAgentCount]  = useState(0);
+  const [isLive,      setIsLive]      = useState(false);
+  const [collecting,  setCollecting]  = useState(true);
+  const [timer,       setTimer]       = useState(0);
+  const [selectedLab, setSelectedLab] = useState("All");
+  const [noOfRows,    setNoOfRows]    = useState(4);
 
-  // Background poll to keep the tab badge count fresh
+  const mockPCs = useSelector((state) => state.pcs.pcs);
+
+  // ── Poll /status + /alerts every 5s ──────────────────────────────────────
   useEffect(() => {
     const poll = async () => {
       try {
-        const res = await axios.get("http://127.0.0.1:5000/alerts");
-        setAlertCount(res.data.total_alerts || 0);
+        const [statusRes, alertsRes] = await Promise.all([
+          axios.get("http://127.0.0.1:5000/status"),
+          axios.get("http://127.0.0.1:5000/alerts"),
+        ]);
+        setAgentCount(statusRes.data.agents       || 0);
+        setAlertCount(alertsRes.data.total_alerts || 0);
+        setIsLive((statusRes.data.agents || 0) > 0);
+        setCollecting(statusRes.data.collecting ?? true);
       } catch (_) {}
     };
     poll();
-    const id = setInterval(poll, 10000);
+    const id = setInterval(poll, 5000);
     return () => clearInterval(id);
   }, []);
 
-  const mockPCs = useSelector((state) => state.pcs.pcs);
-  const [selectedLab, setSelectedLab] = useState("All");
-  const [noOfRows, setNoOfRows] = useState(4);
+  // ── Timer counts up while live + collecting ───────────────────────────────
+  useEffect(() => {
+    let id;
+    if (isLive && collecting) {
+      id = setInterval(() => setTimer((t) => t + 1), 1000);
+    } else if (!collecting) {
+      setTimer(0);
+    }
+    return () => clearInterval(id);
+  }, [isLive, collecting]);
 
-  // Derived reactively from Redux — updates instantly when any PC's MAC changes
+  // ── Start / Stop toggle ───────────────────────────────────────────────────
+  const handleToggle = async () => {
+    try {
+      const res = await axios.post("http://127.0.0.1:5000/control");
+      setCollecting(res.data.collecting);
+    } catch (err) {
+      console.error("Control error:", err);
+    }
+  };
+
+  const formatTime = (s) => {
+    const h   = String(Math.floor(s / 3600)).padStart(2, "0");
+    const m   = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+    const sec = String(s % 60).padStart(2, "0");
+    return `${h}:${m}:${sec}`;
+  };
+
   const filteredPCs = useMemo(() => {
     switch (selectedLab) {
-      case "CSL3":   return mockPCs.slice(0, 50);
+      case "CSL3":   return mockPCs.slice(0,  50);
       case "CSL4":   return mockPCs.slice(50, 100);
-      case "CSL3.1": return mockPCs.slice(0, 25);
+      case "CSL3.1": return mockPCs.slice(0,  25);
       case "CSL3.2": return mockPCs.slice(25, 50);
       case "CSL4.1": return mockPCs.slice(50, 75);
       case "CSL4.2": return mockPCs.slice(75, 100);
@@ -65,135 +98,123 @@ const NetworkDashboard = () => {
   const handleLabChange = (value) => {
     setSelectedLab(value);
     switch (value) {
-      case "CSL3":   setNoOfRows(2); break;
-      case "CSL4":   setNoOfRows(2); break;
-      case "CSL3.1": setNoOfRows(1); break;
-      case "CSL3.2": setNoOfRows(1); break;
-      case "CSL4.1": setNoOfRows(1); break;
-      case "CSL4.2": setNoOfRows(1); break;
-      default:       setNoOfRows(4); break;
+      case "CSL3":   case "CSL4":   setNoOfRows(2); break;
+      case "CSL3.1": case "CSL3.2":
+      case "CSL4.1": case "CSL4.2": setNoOfRows(1); break;
+      default:                       setNoOfRows(4); break;
     }
-  };
-
-  useEffect(() => {
-    let interval;
-    if (isRunning) {
-      interval = setInterval(() => {
-        setTimer((prevTime) => prevTime + 1);
-      }, 1000);
-    } else {
-      clearInterval(interval);
-    }
-    return () => clearInterval(interval);
-  }, [isRunning]);
-
-  const start = async () => {
-    try {
-      await axios.get(`http://127.0.0.1:5000/start`);
-    } catch (err) {
-      setError("Error start");
-      console.error(err);
-    }
-  };
-
-  const stop = async () => {
-    try {
-      await axios.get(`http://127.0.0.1:5000/stop`);
-    } catch (err) {
-      setError("Error stop");
-      console.error(err);
-    }
-  };
-
-  const handleToggle = () => {
-    if (isRunning) {
-      stop();
-    } else {
-      start();
-    }
-    setIsRunning(!isRunning);
-    if (!isRunning) {
-      setTimer(0);
-    }
-  };
-
-  const formatTime = (seconds) => {
-    const hrs = String(Math.floor(seconds / 3600)).padStart(2, "0");
-    const mins = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
-    const secs = String(seconds % 60).padStart(2, "0");
-    return `${hrs}:${mins}:${secs}`;
   };
 
   return (
-    <div>
-      {/* Header */}
-      <header className="bg-blue-700 text-white text-center py-4">
-        <h1 className="font-black text-3xl">Network Monitoring Dashboard</h1>
-        <h2 className="text-xl">DCS CSL3 & CSL4</h2>
-      </header>
+    <div style={{ fontFamily: "'JetBrains Mono', monospace", background: "#080b14", minHeight: "100vh", color: "#e2e8f0" }}>
 
-      {/* Top Bar: Start/Stop + Filter */}
-      <div className="text-xl flex w-[96vw] m-auto py-4 pt-6 items-center justify-between">
-        <div className="ml-2 flex items-center gap-3">
-          <div className="bg-blue-500 p-2 rounded-md">
-            {!isRunning ? (
-              <FaPlay
-                className="hover:cursor-pointer text-green-400"
-                onClick={handleToggle}
-              />
-            ) : (
-              <FaStop
-                className="hover:cursor-pointer text-red-500"
-                onClick={handleToggle}
-              />
-            )}
-          </div>
-          {isRunning && (
-            <div className="text-red-500 font-bold">{formatTime(timer)}</div>
-          )}
-        </div>
+      {/* ── Header ── */}
+      <header style={{ background: "#0e1221", borderBottom: "1px solid #1e2540", padding: "1rem 2rem", display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+        <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: "1.5rem", fontWeight: 800, color: "#00c2ff", letterSpacing: "-0.02em", margin: 0 }}>
+          NETMON
+        </h1>
+        <span style={{ fontSize: "11px", color: "#4a5580", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+          Network Usage Dashboard
+        </span>
 
+        {/* Live badge */}
+        <span style={{
+          fontSize: "11px", padding: "4px 12px", borderRadius: "20px", fontWeight: 700, letterSpacing: "0.1em",
+          background: isLive ? "#00ffb222" : "#ffaa0022",
+          color:      isLive ? "#00ffb2"   : "#ffaa00",
+          border:     `1px solid ${isLive ? "#00ffb255" : "#ffaa0055"}`,
+        }}>
+          {isLive ? "LIVE" : "WAITING"}
+        </span>
+
+        {/* Agent count */}
+        <span style={{ fontSize: "11px", color: "#00ffb2" }}>
+          {agentCount} agent{agentCount !== 1 ? "s" : ""}
+        </span>
+
+        {/* Pulse dot */}
+        {isLive && collecting && (
+          <div style={{
+            width: "8px", height: "8px", borderRadius: "50%",
+            background: "#00ffb2", boxShadow: "0 0 8px #00ffb2",
+            animation: "pulse 2s infinite",
+          }} />
+        )}
+
+        {/* Timer */}
+        {isLive && collecting && (
+          <span style={{ fontSize: "13px", color: "#ff4f6a", fontWeight: 700 }}>
+            {formatTime(timer)}
+          </span>
+        )}
+
+        {/* Start / Stop button */}
+        <button
+          onClick={handleToggle}
+          style={{
+            padding: "6px 18px", borderRadius: "6px", border: "none",
+            cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
+            fontSize: "12px", fontWeight: 700, letterSpacing: "0.08em",
+            background: collecting ? "#ff4f6a" : "#00ffb2",
+            color: "#080b14", transition: "opacity 0.15s",
+          }}
+        >
+          {collecting ? "STOP" : "START"}
+        </button>
+
+        {/* Lab selector */}
         <select
           value={selectedLab}
           onChange={(e) => handleLabChange(e.target.value)}
-          className="px-2 py-1 rounded-lg bg-blue-500 text-lg hover:cursor-pointer text-white"
+          style={{
+            marginLeft: "auto", padding: "6px 12px", borderRadius: "6px",
+            background: "#141828", border: "1px solid #1e2540",
+            color: "#e2e8f0", fontFamily: "'JetBrains Mono', monospace",
+            fontSize: "12px", cursor: "pointer",
+          }}
         >
-          {labOptions.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
+          {labOptions.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
-      </div>
+      </header>
 
-      {/* Tab Bar */}
-      <div className="w-[96vw] m-auto">
-        <div className="border-b border-gray-300">
-          <div className="flex gap-1">
-            {TABS.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`px-6 py-2 text-base font-semibold rounded-t-lg transition-colors duration-150 flex items-center gap-2 ${
-                  activeTab === tab.id
-                    ? "bg-blue-600 text-white border border-b-0 border-blue-600"
-                    : "bg-gray-100 text-gray-600 border border-gray-300 hover:bg-blue-50 hover:text-blue-600"
-                }`}
-              >
-                {tab.label}
-                {tab.id === "alerts" && alertCount > 0 && (
-                  <span className="bg-red-500 text-white text-xs font-bold rounded-full px-2 py-0.5 min-w-[20px] text-center">
-                    {alertCount}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
+      {/* ── Tab bar ── */}
+      <div style={{ background: "#0e1221", borderBottom: "1px solid #1e2540", padding: "0 2rem" }}>
+        <div style={{ display: "flex", gap: "4px" }}>
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              style={{
+                padding: "10px 20px", fontSize: "12px", fontWeight: 600,
+                fontFamily: "'JetBrains Mono', monospace",
+                letterSpacing: "0.06em", textTransform: "uppercase",
+                border: "none",
+                borderBottom: activeTab === tab.id ? "2px solid #00c2ff" : "2px solid transparent",
+                background: "transparent",
+                color: activeTab === tab.id ? "#00c2ff" : "#4a5580",
+                cursor: "pointer", transition: "color 0.15s",
+                display: "flex", alignItems: "center", gap: "6px",
+              }}
+            >
+              {tab.label}
+              {tab.id === "alerts" && alertCount > 0 && (
+                <span style={{
+                  background: "#ff4f6a", color: "#080b14", fontSize: "10px",
+                  fontWeight: 700, borderRadius: "20px", padding: "1px 7px",
+                  minWidth: "18px", textAlign: "center",
+                }}>
+                  {alertCount}
+                </span>
+              )}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Tab Content */}
-      <div className="w-[96vw] m-auto pt-4">
+      {/* ── Tab content ── */}
+      <div style={{ padding: "2rem" }}>
         {activeTab === "monitor" && (
           <PCMonitorTab
             mockPCs={mockPCs}
@@ -203,26 +224,22 @@ const NetworkDashboard = () => {
           />
         )}
         {activeTab === "alerts" && (
-          <AlertsTab
-            onAlertCount={setAlertCount}
-            selectedLab={selectedLab}
-          />
+          <AlertsTab onAlertCount={setAlertCount} selectedLab={selectedLab} />
         )}
         {activeTab === "analysis" && (
-          <AnalysisTab
-            selectedLab={selectedLab}
-            filteredPCs={filteredPCs}
-          />
+          <AnalysisTab selectedLab={selectedLab} filteredPCs={filteredPCs} />
         )}
         {activeTab === "config" && (
-          <ConfigTab
-            mockPCs={mockPCs}
-            selectedLab={selectedLab}
-            filteredPCs={filteredPCs}
-            noOfRows={noOfRows}
-          />
+          <ConfigTab mockPCs={mockPCs} selectedLab={selectedLab} filteredPCs={filteredPCs} noOfRows={noOfRows} />
         )}
       </div>
+
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;700;800&display=swap');
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+        * { box-sizing: border-box; }
+        option { background: #141828; }
+      `}</style>
     </div>
   );
 };

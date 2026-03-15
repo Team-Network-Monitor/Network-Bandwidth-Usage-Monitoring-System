@@ -1,358 +1,157 @@
 from flask import Flask, jsonify, request
-import socket
-import dns.resolver
-import json
-import threading
-import time
-import re
-import requests
-import datetime
-
-from scapy.all import sniff, Ether, IP, UDP, TCP
-from scapy.layers.http import HTTPRequest
-from scapy.all import DNS, DNSRR,DNSQR
-from collections import defaultdict
 from flask_cors import CORS
+import json
+import re
+import time
+import threading
+import functools
+import requests
 
 app = Flask(__name__)
 CORS(app)
 
-# -------------------------------
-# Global variables
-# -------------------------------
-running = False
-capturing_flag = True
-sniffing_thread = None
-lock = threading.Lock()
-monitoring_started = False
-
-active_macs = {}
-mac_to_ip = {}
-domain_ips = {}
-
+# -----------------------------------------------------------------------
+# Config
+# -----------------------------------------------------------------------
+BLACKLIST_FILE = "blacklist.json"
+CONFIG_FILE    = "config.json"
 MAC_FILE = 'mac_addresses.json'
-BLACKLIST_FILE = 'blacklist.json'
-DOMAIN_IP_FILE = 'domain_ips.json'
-CONFIG_FILE = "config.json"
+collecting = True
+
+# -----------------------------------------------------------------------
+# State
+# -----------------------------------------------------------------------
+lock             = threading.Lock()
+agent_data       = {}   # mac -> latest payload
+_blacklist_cache = None
 
 
-# Structure: mac_traffic[mac][upload/download][2label_domain] = {ips, total_bytes, protocols}
-mac_traffic = defaultdict(lambda: {
-    "upload": defaultdict(lambda: {"ips": [], "total_bytes": 0, "protocols": []}),
-    "download": defaultdict(lambda: {"ips": [], "total_bytes": 0, "protocols": []})
-})
-
-mac_stats = defaultdict(lambda: {
-    "upload_bytes": 0,
-    "download_bytes": 0,
-    "last_upload": 0,
-    "last_download": 0,
-    "upload_speed": 0,
-    "download_speed": 0
-})
-
-# -------------------------------
-# Helper functions
-# -------------------------------
-
-def get_2label_domain(domain):
-    """Return last two labels of a domain, e.g., sub.example.com -> example.com"""
-    if not domain:
-        return None
-    parts = domain.lower().strip('.').split('.')
-    return ".".join(parts[-2:]) if len(parts) >= 2 else domain.lower()
-
-def normalize_domain(domain):
-    if not domain:
-        return None
-    return domain.lower().strip('.')
-
-def is_subdomain(domain, parent_domain):
-    if not domain or not parent_domain:
-        return False
-    return domain == parent_domain or domain.endswith("." + parent_domain)
-
-def get_mac_vendor(mac):
-    """Return vendor name for a MAC address using macvendors API"""
-    mac = mac.upper().replace(":", "-")
-    url = f"https://api.macvendors.com/{mac}"
-    try:
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            return response.text
-    except:
-        return "Unknown"
-    return "Unknown"
-
-def get_hostname(ip):
-    """Return hostname for a given IP (reverse DNS)"""
-    try:
-        return socket.gethostbyaddr(ip)[0]
-    except socket.herror:
-        return "Unknown"
-
-def get_accessed_site(pkt):
-    # HTTP host
-    if pkt.haslayer(HTTPRequest):
-        return pkt[HTTPRequest].Host.decode(errors="ignore")
-
-    # DNS query
-    if pkt.haslayer(DNSQR):
-        return pkt[DNSQR].qname.decode(errors="ignore").rstrip(".")
-
-    return None
-
-# -------------------------------
+# -----------------------------------------------------------------------
 # File I/O
-# -------------------------------
+# -----------------------------------------------------------------------
+
 def load_json(file_path, default):
     try:
-        with open(file_path, 'r') as f:
+        with open(file_path, "r") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return default
 
 def save_json(file_path, data):
-    with open(file_path, 'w') as f:
+    with open(file_path, "w") as f:
         json.dump(data, f, indent=4)
 
+def load_blacklist():
+    global _blacklist_cache
+    if _blacklist_cache is None:
+        _blacklist_cache = load_json(BLACKLIST_FILE, {"domains": []})
+    return _blacklist_cache
+
+def save_blacklist(bl):
+    global _blacklist_cache
+    _blacklist_cache = bl
+    save_json(BLACKLIST_FILE, bl)
+
 def load_config():
-    return load_json(CONFIG_FILE, {
-        "total_usage_limit": 1 * 1024 * 1024   # default 500MB
-    })
+    return load_json(CONFIG_FILE, {"total_usage_limit": 100 * 1024 * 1024})
 
 def save_config(cfg):
     save_json(CONFIG_FILE, cfg)
 
-
-# MACs
-mac_addresses = load_json(MAC_FILE, [])
 config = load_config()
+mac_addresses = load_json(MAC_FILE, [])
 
-# Blacklist
-def load_blacklist():
-    return load_json(BLACKLIST_FILE, {"domains": [], "ips": []})
+# -----------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------
 
-def save_blacklist(blacklist):
-    save_json(BLACKLIST_FILE, blacklist)
+def _normalize_mac(mac):
+    return mac.lower().replace("-", ":")
 
-# Domain IPs
-def load_domain_ips():
-    global domain_ips
-    domain_ips = load_json(DOMAIN_IP_FILE, {})
+def _normalize_domain(domain):
+    if not domain:
+        return None
+    return domain.lower().strip(".")
 
-def save_domain_ips():
-    save_json(DOMAIN_IP_FILE, domain_ips)
+def _get_2label(domain):
+    if not domain:
+        return None
+    parts = domain.lower().strip(".").split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else domain.lower()
 
-# -------------------------------
-# Packet processing
-# -------------------------------
-def process_packet(packet):
-    global mac_traffic, active_macs, domain_ips, mac_to_ip, mac_stats
+def _is_subdomain(domain, parent):
+    if not domain or not parent:
+        return False
+    return domain == parent or domain.endswith("." + parent)
 
-    if not packet.haslayer(Ether):
-        return
+def _check_blacklist_dns(dns_list, bl_domains):
+    """Return set of blacklisted domains found in agent dns list."""
+    blocked = set()
+    for domain in dns_list:
+        if any(_is_subdomain(domain, bl) for bl in bl_domains):
+            blocked.add(domain)
+    return blocked
 
-    src_mac = packet[Ether].src.lower()
-    dst_mac = packet[Ether].dst.lower()
-    size = len(packet)
-    site = get_accessed_site(packet)
+@functools.lru_cache(maxsize=512)
+def _get_mac_vendor(mac):
+    try:
+        r = requests.get(
+            f"https://api.macvendors.com/{mac.upper().replace(':', '-')}",
+            timeout=5
+        )
+        if r.status_code == 200:
+            return r.text.strip()
+    except Exception:
+        pass
+    return "Unknown"
 
-    current_time = time.time()
-    for mac in [src_mac, dst_mac]:
-        if mac in mac_addresses:
-            active_macs[mac] = current_time
+# -----------------------------------------------------------------------
+# Agent ingestion
+# -----------------------------------------------------------------------
 
-    src_ip, dst_ip = 'Unknown', 'Unknown'
-    protocol = 'Unknown'
+def _ingest(raw):
+    mac = _normalize_mac(raw.get("mac", ""))
+    if not re.match(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$", mac):
+        return None
 
-    # DNS mapping
-    if packet.haslayer(DNS):
-        dns = packet[DNS]
-        if dns.qr == 1 and dns.an:
-            for ans in dns.an:
-                if ans.type == 1:  # A record
-                    domain = ans.rrname.decode(errors='ignore').rstrip('.')
-                    ip = ans.rdata
-                    if isinstance(ip, bytes):
-                        ip = socket.inet_ntoa(ip)
-                    with lock:
-                        domain_ips[ip] = domain
-                        save_domain_ips()
+    # Normalize incoming dns to 2-label unique set
+    IGNORE_SUFFIXES = (".local", ".arpa", ".internal")
 
-    # IP layer
-    if packet.haslayer(IP):
-        ip_layer = packet[IP]
-        src_ip = ip_layer.src
-        dst_ip = ip_layer.dst
-        mac_to_ip[src_mac] = src_ip
+    incoming_dns = set()
+    for domain in raw.get("dns", []):
+        d2 = _get_2label(domain)
+        if d2 and not any(d2.endswith(s) for s in IGNORE_SUFFIXES):
+            incoming_dns.add(d2)
 
-        # Determine protocol
-        if packet.haslayer(TCP):
-            tcp = packet[TCP]
-            if tcp.dport == 80 or tcp.sport == 80:
-                protocol = "HTTP"
-            elif tcp.dport == 443 or tcp.sport == 443:
-                protocol = "HTTPS"
-            else:
-                protocol = "TCP"
-        elif packet.haslayer(UDP):
-            udp = packet[UDP]
-            if udp.dport == 53 or udp.sport == 53:
-                protocol = "DNS"
-            else:
-                protocol = "UDP"
-
-    # HTTP Host fallback
-    host = None
-    if packet.haslayer(HTTPRequest):
-        http = packet[HTTPRequest]
-        host = http.Host.decode(errors='ignore') if http.Host else None
-
-    # Update mac_traffic + mac_stats
-    for mac, direction, target_ip in [(src_mac, "upload", dst_ip), (dst_mac, "download", src_ip)]:
-        if mac in mac_addresses:
-            domain = domain_ips.get(target_ip) or host
-            main_domain = get_2label_domain(domain) if domain else None
-            if not main_domain:
-                continue
-
-            with lock:
-                # Domain-level traffic
-                entry = mac_traffic[mac][direction][main_domain]
-                if target_ip not in entry["ips"]:
-                    entry["ips"].append(target_ip)
-                entry["total_bytes"] += size
-                if protocol not in entry["protocols"]:
-                    entry["protocols"].append(protocol)
-
-                # Speed-level traffic
-                stats = mac_stats[mac]
-                if direction == "upload":
-                    stats["upload_bytes"] += size
-                    stats["last_upload"] += size
-                else:
-                    stats["download_bytes"] += size
-                    stats["last_download"] += size
-
-
-# -------------------------------
-# Speed Calculator
-# -------------------------------
-
-def speed_calculator():
-    while True:
-        time.sleep(1)  # calculate every 1 second
-        with lock:
-            for mac, stats in mac_stats.items():
-                stats["upload_speed"] = stats["last_upload"]
-                stats["download_speed"] = stats["last_download"]
-                stats["last_upload"] = 0
-                stats["last_download"] = 0
-
-threading.Thread(target=speed_calculator, daemon=True).start()
-
-
-# -------------------------------
-# Sniffing
-# -------------------------------
-def start_sniffing(iface="Wi-Fi"):
-    global capturing_flag
-    print(f"Sniffing started on {iface}")
-    while capturing_flag:
-        try:
-            sniff(prn=process_packet, iface=iface, timeout=1, store=False)
-        except Exception as e:
-            print(f"Sniffing error: {e}")
-            time.sleep(1)
-
-# -------------------------------
-# API endpoints
-# -------------------------------
-@app.route("/set_limit", methods=["POST"])
-def set_limit():
-    data = request.get_json()
-    mb = data.get("mb")
-
-    if not isinstance(mb, (int, float)) or mb <= 0:
-        return jsonify({"error": "Invalid value"}), 400
-
-    config["total_usage_limit"] = int(mb * 1024 * 1024)
-    save_config(config)
-
-    return jsonify({
-        "message": "Limit updated",
-        "limit_MB": mb
-    })
-
-@app.route("/start", methods=["GET"])
-def start_monitoring():
-    global running, capturing_flag, sniffing_thread
-    global monitoring_started
-    monitoring_started = True
-    if not running:
-        capturing_flag = True
-        running = True
-        if sniffing_thread is None or not sniffing_thread.is_alive():
-            sniffing_thread = threading.Thread(target=start_sniffing, daemon=True)
-            sniffing_thread.start()
-        return jsonify({"message": "Monitoring started!"})
-    return jsonify({"message": "Monitoring is already running!"})
-
-@app.route("/stop", methods=["GET"])
-def stop_monitoring():
-    global running, capturing_flag, sniffing_thread, mac_traffic, active_macs, mac_to_ip
-    if running:
-        capturing_flag = False
-        running = False
-        monitoring_started = False
-        if sniffing_thread is not None:
-            sniffing_thread.join(timeout=2)
-        mac_traffic.clear()
-        active_macs.clear()
-        mac_to_ip.clear()
-        mac_stats.clear()
-        return jsonify({"message": "Monitoring stopped successfully!"})
-    return jsonify({"message": "Monitoring was not running!"})
-
-@app.route("/data", methods=["GET"])
-def get_data():
     with lock:
-        result = {}
-        for mac in mac_addresses:
-            stats = mac_stats[mac]
-            result[mac] = {
-                "ip": mac_to_ip.get(mac, "Unknown"),
-                "total_usage": stats["upload_bytes"] + stats["download_bytes"],
-                "upload_speed": stats["upload_speed"],      # bytes/sec
-                "download_speed": stats["download_speed"],  # bytes/sec
-                "upload": mac_traffic[mac]["upload"],
-                "download": mac_traffic[mac]["download"]
-            }
-        return jsonify(result)
+        # Accumulate dns across intervals
+        existing_dns = set(agent_data[mac]["dns"]) if mac in agent_data else set()
+        merged_dns   = existing_dns | incoming_dns
 
+        agent_data[mac] = {
+            "hostname":  raw.get("name",     "Unknown"),
+            "username":  raw.get("username", "Unknown"),
+            "ip":        raw.get("ip",       "Unknown"),
+            "mac":       mac,
+            "os":        raw.get("os",       "Unknown"),
+            "timestamp": raw.get("timestamp", time.time()),
+            "state":     raw.get("state",    "sending"),
+            "usage": {
+                "upload":   raw.get("usage",       {}).get("upload",   0),
+                "download": raw.get("usage",       {}).get("download", 0),
+            },
+            "total_usage": {
+                "upload":   raw.get("total_usage", {}).get("upload",   0),
+                "download": raw.get("total_usage", {}).get("download", 0),
+            },
+            "process": raw.get("process", []),
+            "dns":     list(merged_dns),
+        }
+    return mac
 
-@app.route("/data/<mac_address>", methods=["GET"])
-def get_mac_data(mac_address):
-    mac_address = mac_address.lower()
-    if mac_address in mac_addresses:
-        with lock:
-            stats = mac_stats[mac_address]
-            ip = mac_to_ip.get(mac_address, "Unknown")
-            result = {
-                "ip": mac_to_ip.get(mac_address, "Unknown"),
-                "hostname": get_hostname(ip) if ip != "Unknown" else "Unknown",
-                "vendor": get_mac_vendor(mac_address),
-                "last_active":  datetime.datetime.fromtimestamp(active_macs.get(mac_address, 0)),
-                "total_usage": stats["upload_bytes"] + stats["download_bytes"],
-                "upload_speed": stats["upload_speed"],
-                "download_speed": stats["download_speed"],
-                "upload": mac_traffic[mac_address]["upload"],
-                "download": mac_traffic[mac_address]["download"]
-            }
-            return jsonify(result)
-    return jsonify({"error": "MAC address not found"}), 404
-
+# -----------------------------------------------------------------------
+# Agent receiver
+# -----------------------------------------------------------------------
 
 @app.route("/add_mac", methods=["POST"])
 def add_mac():
@@ -380,200 +179,274 @@ def delete_mac():
 def list_macs():
     return jsonify({"monitored_macs": mac_addresses})
 
-@app.route("/blacklist/domain", methods=["POST"])
-def add_blacklist_domain():
-    data = request.get_json()
-    domains = [normalize_domain(d) for d in data.get('domains', [])]
-    blacklist = load_blacklist()
-    new_domains = [d for d in domains if d not in blacklist['domains']]
-    blacklist['domains'] += new_domains
-    save_blacklist(blacklist)
-    return jsonify({"message": f"Added {len(new_domains)} new domains", "blacklist": blacklist})
+@app.route("/control", methods=["POST"])
+def control():
+    global collecting
+    collecting = not collecting
+    print(f"[control] {'COLLECTING' if collecting else 'STOPPED'}")
+
+    if not collecting:
+        # Flush all agent data when stopped
+        with lock:
+            agent_data.clear()
+        print("[control] Agent data cleared")
+
+    return jsonify({"collecting": collecting})
+
+@app.route("/collecting", methods=["GET"])
+def get_collecting():
+    return jsonify({"collecting": collecting})
+
+@app.route("/usage", methods=["POST"])
+def agent_usage():
+    raw = request.get_json(silent=True)
+    if not raw:
+        return jsonify({"error": "No JSON body"}), 400
+
+    mac = _normalize_mac(raw.get("mac", ""))
+    if not re.match(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$", mac):
+        return jsonify({"error": "Missing or invalid mac"}), 400
+
+    if collecting:
+        # Only ingest when collecting
+        mac = _ingest(raw)
+        d = agent_data[mac]
+        print(f"[{d['os']}] {d['username']}@{d['hostname']} ({d['ip']})  "
+              f"↑{d['usage']['upload']:.0f} B/s  "
+              f"↓{d['usage']['download']:.0f} B/s  "
+              f"procs={len(d['process'])}  dns={len(d['dns'])}")
+    else:
+        print(f"[stopped] Ignored data from {mac}")
+
+    return jsonify({"status": "ok", "collecting": collecting})
+
+# -----------------------------------------------------------------------
+# Data endpoints
+# -----------------------------------------------------------------------
+
+@app.route("/data", methods=["GET"])
+def get_all():
+    """All agents keyed by MAC."""
+    with lock:
+        return jsonify(agent_data)
+
+@app.route("/data/<mac_address>", methods=["GET"])
+def get_one(mac_address):
+    """Full detail for a single agent."""
+    mac = _normalize_mac(mac_address)
+    with lock:
+        if mac not in agent_data:
+            return jsonify({"error": "Agent not found"}), 404
+        d = dict(agent_data[mac])
+
+    vendor = _get_mac_vendor(mac)
+    return jsonify({**d, "vendor": vendor})
+
+# -----------------------------------------------------------------------
+# Active status
+# -----------------------------------------------------------------------
+
+@app.route("/active_status", methods=["GET"])
+def active_status():
+    now = time.time()
+    with lock:
+        result = {}
+
+        # MACs from file — always included even if agent not connected
+        for mac in mac_addresses:
+            if mac in agent_data:
+                d = agent_data[mac]
+                result[mac] = {
+                    "is_active": (now - d["timestamp"]) <= 10,
+                    "hostname":  d["hostname"],
+                    "username":  d["username"],
+                    "ip":        d["ip"],
+                }
+            else:
+                # Known MAC but no agent connected
+                result[mac] = {
+                    "is_active": False,
+                    "hostname":  "Unknown",
+                    "username":  "Unknown",
+                    "ip":        "Unknown",
+                }
+
+        # MACs from agents not in file — include them too
+        for mac, d in agent_data.items():
+            if mac not in result:
+                result[mac] = {
+                    "is_active": (now - d["timestamp"]) <= 10,
+                    "hostname":  d["hostname"],
+                    "username":  d["username"],
+                    "ip":        d["ip"],
+                }
+
+    return jsonify(result)
+
+# -----------------------------------------------------------------------
+# Blacklist
+# -----------------------------------------------------------------------
 
 @app.route("/blacklist/domains", methods=["GET"])
 def get_blacklist_domains():
-    return jsonify({"domains": load_blacklist()['domains']})
+    return jsonify({"domains": load_blacklist()["domains"]})
+
+@app.route("/blacklist/domain", methods=["POST"])
+def add_blacklist_domain():
+    data      = request.get_json()
+    incoming  = [_normalize_domain(d) for d in data.get("domains", []) if d]
+    blacklist = load_blacklist()
+    existing  = set(blacklist["domains"])
+    added     = [d for d in incoming if d and d not in existing]
+    blacklist["domains"] += added
+    save_blacklist(blacklist)
+    return jsonify({"message": f"Added {len(added)} domain(s)", "blacklist": blacklist})
 
 @app.route("/blacklist/domain/delete", methods=["POST"])
 def delete_blacklist_domain():
-    data = request.get_json()
-    domain = normalize_domain(data.get('domain', ''))
-    
+    domain = _normalize_domain(request.get_json().get("domain", ""))
     if not domain:
         return jsonify({"error": "Domain not provided"}), 400
-    
     blacklist = load_blacklist()
-    
-    if domain in blacklist['domains']:
-        blacklist['domains'].remove(domain)
+    if domain in blacklist["domains"]:
+        blacklist["domains"].remove(domain)
         save_blacklist(blacklist)
-        return jsonify({
-            "message": f"Domain '{domain}' removed from blacklist",
-            "blacklist": blacklist
-        })
-    else:
-        return jsonify({
-            "message": f"Domain '{domain}' not found in blacklist",
-            "blacklist": blacklist
-        }), 404
-
+        return jsonify({"message": f"'{domain}' removed", "blacklist": blacklist})
+    return jsonify({"error": f"'{domain}' not found"}), 404
 
 @app.route("/check_blacklist", methods=["GET"])
-def check_blacklist_access():
-    blacklist = load_blacklist()
-    results = []
+def check_blacklist():
+    bl_domains = load_blacklist()["domains"]
+    results    = []
     with lock:
-        for mac in mac_addresses:
-            accessed = False
-            for direction in ["upload", "download"]:
-                for domain, info in mac_traffic[mac][direction].items():
-                    # Check IP blacklist
-                    if any(ip in blacklist['ips'] for ip in info["ips"]):
-                        accessed = True
-                        break
-                    # Check domain blacklist
-                    if any(is_subdomain(domain, bl) for bl in blacklist['domains']):
-                        accessed = True
-                        break
-                if accessed:
-                    break
-            results.append({"mac": mac, "accessed_blacklist": accessed})
+        for mac, d in agent_data.items():
+            blocked = _check_blacklist_dns(d["dns"], bl_domains)
+            results.append({
+                "mac":                mac,
+                "hostname":           d["hostname"],
+                "username":           d["username"],
+                "accessed_blacklist": bool(blocked),
+                "blocked_domains":    list(blocked),
+            })
     return jsonify(results)
+
+# -----------------------------------------------------------------------
+# Usage limit
+# -----------------------------------------------------------------------
+
+@app.route("/set_limit", methods=["POST"])
+def set_limit():
+    mb = request.get_json().get("mb")
+    if not isinstance(mb, (int, float)) or mb <= 0:
+        return jsonify({"error": "Invalid value"}), 400
+    config["total_usage_limit"] = int(mb * 1024 * 1024)
+    save_config(config)
+    return jsonify({"message": "Limit updated", "limit_MB": mb})
 
 @app.route("/check_limit", methods=["GET"])
-def check_usage_limit():
-    results = []
-
+def check_limit():
+    limit    = config["total_usage_limit"]
+    limit_mb = round(limit / (1024 * 1024), 2)
+    results  = []
     with lock:
-        for mac in mac_addresses:
-            if not monitoring_started:          # 👈 add this guard
-                results.append({
-                    "mac": mac,
-                    "exceeded": False,
-                    "total_MB": 0,
-                    "limit_MB": round(config["total_usage_limit"] / (1024*1024), 2)
-                })
-                continue
-            stats = mac_stats[mac]
-            total_usage = stats["upload_bytes"] + stats["download_bytes"]
-            limit = config["total_usage_limit"]
-
+        for mac, d in agent_data.items():
+            total = d["total_usage"]["upload"] + d["total_usage"]["download"]
             results.append({
-                "mac": mac,
-                "exceeded": total_usage > limit,
-                "total_MB": round(total_usage / (1024*1024), 2),
-                "limit_MB": round(limit / (1024*1024), 2)
+                "mac":      mac,
+                "hostname": d["hostname"],
+                "username": d["username"],
+                "exceeded": total > limit,
+                "total_MB": round(total / (1024 * 1024), 2),
+                "limit_MB": limit_mb,
             })
-
     return jsonify(results)
 
-
-
-@app.route("/active_status", methods=["GET"])
-def get_active_status():
-    threshold = 300
-    current_time = time.time()
-    status = {}
-    with lock:
-        for mac in mac_addresses:
-            last_active = active_macs.get(mac, 0)
-            is_active = (current_time - last_active) <= threshold
-            status[mac] = {"is_active": is_active}
-    return jsonify(status)
+# -----------------------------------------------------------------------
+# Alerts
+# -----------------------------------------------------------------------
 
 @app.route("/alerts", methods=["GET"])
 def get_alerts():
-    alerts = []
-    now = time.time()
-
-    INACTIVE_LIMIT = 300          # 5 min
-    BANDWIDTH_LIMIT = 5 * 1024 * 1024   # 5MB/s
-
-    blacklist = load_blacklist()
+    alerts     = []
+    now        = time.time()
+    INACTIVE   = 10
+    limit      = config["total_usage_limit"]
+    bl_domains = load_blacklist()["domains"]
 
     with lock:
+        # ── Alerts for connected agents ────────────────────────────────────
+        for mac, d in agent_data.items():
+            hostname = d["hostname"]
+            username = d["username"]
+            total    = d["total_usage"]["upload"] + d["total_usage"]["download"]
 
-        # -----------------------
-        # Alerts for monitored MACs
-        # -----------------------
-        for mac in mac_addresses:
-
-            stats = mac_stats[mac]
-            last_seen = active_macs.get(mac, 0)
-
-            # 1️⃣ Inactive device
-
-            if monitoring_started and (now - last_seen > INACTIVE_LIMIT):
+            # 1. Inactive
+            if now - d["timestamp"] > INACTIVE:
                 alerts.append({
-                    "mac": mac,
-                    "type": "inactive",
-                    "severity": "low",
-                    "message": "Device inactive",
-                    "seconds_idle": int(now - last_seen)
+                    "mac":          mac,
+                    "hostname":     hostname,
+                    "username":     username,
+                    "type":         "inactive",
+                    "severity":     "low",
+                    "message":      "Agent not reporting",
+                    "seconds_idle": int(now - d["timestamp"]),
                 })
 
-            # 2️⃣ High bandwidth usage
-            total_usage = stats["upload_bytes"] + stats["download_bytes"]
-            limit = config["total_usage_limit"]
-
-            if total_usage > limit:
+            # 2. Usage limit exceeded
+            if total > limit:
                 alerts.append({
-                    "mac": mac,
-                    "type": "high_usage",
-                    "severity": "medium",
-                    "total_usage_MB": round(total_usage / (1024*1024), 2),
-                    "limit_MB": round(limit / (1024*1024), 2),
-                    "message": "Total data usage exceeded limit"
+                    "mac":            mac,
+                    "hostname":       hostname,
+                    "username":       username,
+                    "type":           "high_usage",
+                    "severity":       "medium",
+                    "total_usage_MB": round(total / (1024 * 1024), 2),
+                    "limit_MB":       round(limit / (1024 * 1024), 2),
+                    "message":        "Data usage limit exceeded",
                 })
 
-
-            # 3️⃣ Blacklist access
-            blocked_domains = set()
-
-            for direction in ["upload", "download"]:
-                for domain, info in mac_traffic[mac][direction].items():
-
-                    # Check IP blacklist
-                    if any(ip in blacklist["ips"] for ip in info["ips"]):
-                        blocked_domains.add(domain)
-
-                    # Check domain blacklist
-                    if any(is_subdomain(domain, bad) for bad in blacklist["domains"]):
-                        blocked_domains.add(domain)
-
-            # Create separate alert for each domain
-            for blocked_site in blocked_domains:
+            # 3. Blacklist access
+            for site in _check_blacklist_dns(d["dns"], bl_domains):
                 alerts.append({
-                    "mac": mac,
-                    "type": "blacklist",
+                    "mac":      mac,
+                    "hostname": hostname,
+                    "username": username,
+                    "type":     "blacklist",
                     "severity": "high",
-                    "site": blocked_site,
-                    "message": f"{blocked_site} accessed"
+                    "site":     site,
+                    "message":  f"{site} accessed",
                 })
 
-
-
-        # -----------------------
-        # Unknown device detection
-        # -----------------------
-        for mac in active_macs:
-            if mac not in mac_addresses:
+        # ── Inactive alert for MACs in file but no agent connected ─────────
+        for mac in mac_addresses:
+            if mac not in agent_data:
                 alerts.append({
-                    "mac": mac,
-                    "type": "unknown_device",
-                    "severity": "critical",
-                    "message": "Unknown device detected on network"
+                    "mac":          mac,
+                    "hostname":     "Unknown",
+                    "username":     "Unknown",
+                    "type":         "inactive",
+                    "severity":     "low",
+                    "message":      "Agent not connected",
+                    "seconds_idle": -1,
                 })
 
+    return jsonify({"total_alerts": len(alerts), "alerts": alerts})
+
+# -----------------------------------------------------------------------
+# Status
+# -----------------------------------------------------------------------
+
+@app.route("/status", methods=["GET"])
+def status():
     return jsonify({
-        "total_alerts": len(alerts),
-        "alerts": alerts
+        "agents":     len(agent_data),
+        "collecting": collecting,
+        "limit_MB":   round(config["total_usage_limit"] / (1024 * 1024), 2),
     })
 
-
-# -------------------------------
+# -----------------------------------------------------------------------
 # Run
-# -------------------------------
+# -----------------------------------------------------------------------
+
 if __name__ == "__main__":
-    load_domain_ips()
-    app.run(debug=True)
+    app.run(debug=True, host="0.0.0.0", port=5000)

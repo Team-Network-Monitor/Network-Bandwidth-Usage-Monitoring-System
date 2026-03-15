@@ -19,7 +19,7 @@ def packet_callback(packet):
         print("-" * 50)
 
 # Replace 'Ethernet 2' with your actual interface name
-iface_name = "Wi-Fi"
+iface_name = "Ethernet 2"
 
 print(f"[*] Sniffing on interface: {iface_name}")
 sniff(iface=iface_name, prn=packet_callback, store=False)

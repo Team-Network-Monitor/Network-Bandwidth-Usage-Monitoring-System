@@ -1,5 +1,9 @@
 {
-    "domains": [],
+    "domains": [
+        "claude.ai",
+        "chatgpt.com",
+        "google.com"
+    ],
     "ips": [
         ""
     ]

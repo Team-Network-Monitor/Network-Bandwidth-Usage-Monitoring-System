@@ -273,10 +273,10 @@ Network-Bandwidth-Usage-Monitoring-System/
 
 | Screenshot | Description |
 |-----------|-------------|
-| Dashboard Overview | Live table of active agents with their current Upload/Download speeds |
-| Process Monitoring | Detailed view showing the top 10 bandwidth-consuming background applications (e.g. Chrome, Discord) |
-| Alerts Panel | Logs of inactive agents, exceeded data caps, and domain blacklist violations |
-| Settings | Configuration view to modify the global data limit and blacklist entries |
+| Main Dashboard | Live PC grid with status colors, speeds, lab filter, and clickable modals for process/DNS details |
+| Alerts| Real-time severity-sorted alerts for inactive agents, usage limits, and blacklist violations.|
+| Analysis | Lab-wide charts, top processes/sites tables, and per-PC speed breakdowns with history |
+| Config Dashboard | PC MAC assignment grid, blacklist management, and global data limit setter. |
 
 ### Main Dashboard View
 ![Dashboard](https://drive.google.com/uc?export=view&id=1veNwX9WJsDzhQvga-M7rFRI6vXTMPIs-)

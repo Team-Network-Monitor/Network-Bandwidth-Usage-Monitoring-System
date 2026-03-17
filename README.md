@@ -292,7 +292,7 @@ Network-Bandwidth-Usage-Monitoring-System/
 | H.H.A.D.H.M.Hettiarachchi | 2021/CSC/017 | component development, Redux state management |
 | Rideesh Kavindu | 2021/CSC/060 | Flask server, agent design, architecture |
 | T.P.D. Nimshan Tharamasinghe |  2021/CSC/078 | React dashboard, all UI components |
-| G.T. Kaveesha Dilshani | 2021/CSC/101 | Testing |
+| G.T. Kaveesha Dilshani | 2021/CSC/101 | React dashboard, Testing |
 ---
 
 ## 10. Contact Information

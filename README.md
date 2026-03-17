@@ -285,7 +285,7 @@ Network-Bandwidth-Usage-Monitoring-System/
 ![Dashboard](https://drive.google.com/uc?export=view&id=1veNwX9WJsDzhQvga-M7rFRI6vXTMPIs-)
 
 ### Alerts View
-![Alerts](https://drive.google.com/uc?export=view&id=1NNqh5XXGD2Iq9qxnGL4kkgZznrDG0fEf)
+![Alerts](https://drive.google.com/file/d/1MmkGnFsOQsQfuoA0Iq1VhidMxe5WU3sP/view?usp=sharing)
 
 ---
 

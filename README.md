@@ -282,6 +282,11 @@ Network-Bandwidth-Usage-Monitoring-System/
 
 - **Dashboard View:** `![Dashboard]([path/to/screenshot1.png](https://drive.google.com/file/d/1veNwX9WJsDzhQvga-M7rFRI6vXTMPIs-/view?usp=sharing))`
 - **Alerts View:** `![Alerts]([path/to/screenshot2.png](https://drive.google.com/file/d/1NNqh5XXGD2Iq9qxnGL4kkgZznrDG0fEf/view?usp=sharing))`
+- ### Dashboard View
+![Dashboard](https://drive.google.com/uc?export=view&id=1veNwX9WJsDzhQvga-M7rFRI6vXTMPIs-)
+
+### Alerts View
+![Alerts](https://drive.google.com/uc?export=view&id=1NNqh5XXGD2Iq9qxnGL4kkgZznrDG0fEf)
 
 ---
 

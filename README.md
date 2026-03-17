@@ -278,14 +278,18 @@ Network-Bandwidth-Usage-Monitoring-System/
 | Alerts Panel | Logs of inactive agents, exceeded data caps, and domain blacklist violations |
 | Settings | Configuration view to modify the global data limit and blacklist entries |
 
-*(Add screenshots of your dashboard here by replacing the table contents or linking below)*
-
-
-- ### Dashboard View
+- ### Main Dashboard View
 ![Dashboard](https://drive.google.com/uc?export=view&id=1veNwX9WJsDzhQvga-M7rFRI6vXTMPIs-)
 
 ### Alerts View
 ![Alerts](https://drive.google.com/file/d/1MmkGnFsOQsQfuoA0Iq1VhidMxe5WU3sP/view?usp=sharing)
+
+### Analysis View
+![Analysis](https://drive.google.com/file/d/1Y0r7uYqFya6KqGuauP3Hkx9kv-xwp0Q-/view?usp=sharing)
+
+### Config Dashboard View
+![Config ](https://drive.google.com/file/d/1PLHqjrEcKdMaVFB6wY1Q5IXEz7briAlZ/view?usp=sharing)
+
 
 ---
 
